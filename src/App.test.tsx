@@ -357,3 +357,70 @@ it("clamps daily zoom and keeps the weekly view at its original scale", async ()
   });
   expect(screen.getByLabelText("タイムラインの倍率")).toHaveTextContent("50%");
 });
+const groupedData: Snapshot = {
+  ...data,
+  turns: [
+    data.turns[0],
+    {
+      ...data.turns[0],
+      id: "s:t2",
+      turn_id: "t2",
+      start: Date.parse("2026-11-20T12:05Z"),
+      end: Date.parse("2026-11-20T12:20Z"),
+      status: "interrupted",
+      prompt: "次の依頼",
+    },
+    {
+      ...data.turns[0],
+      id: "s:t3",
+      turn_id: "t3",
+      start: Date.parse("2026-11-20T11:00Z"),
+      end: Date.parse("2026-11-20T11:30Z"),
+      prompt: "並列の依頼",
+    },
+  ],
+};
+it("defaults to grouped blocks and preserves exact totals and every turn in detail", async () => {
+  vi.mocked(api.snapshot).mockResolvedValue(groupedData);
+  await mount();
+  expect(document.querySelectorAll(".activity-block")).toHaveLength(1);
+  expect(screen.getByLabelText("作業ブロックの表示単位")).toHaveValue("group");
+  expect(screen.getByTestId("total-elapsed")).toHaveTextContent("2h 15m");
+  fireEvent.click(
+    screen.getByRole("button", { name: /Sample project.*10:00/ }),
+  );
+  const dialog = screen.getByRole("dialog");
+  expect(dialog).toHaveTextContent("作業のまとまり");
+  expect(dialog).toHaveTextContent("2h 15m");
+  expect(dialog).toHaveTextContent("2h 45m");
+  expect(dialog).toHaveTextContent("完了 2");
+  expect(dialog).toHaveTextContent("中断 1");
+  fireEvent.click(screen.getByRole("button", { name: /次の依頼/ }));
+  expect(screen.getByRole("dialog")).toHaveTextContent("t2");
+  expect(screen.getByRole("dialog")).toHaveTextContent("次の依頼");
+  fireEvent.click(screen.getByRole("button", { name: "作業のまとまりに戻る" }));
+  expect(screen.getByRole("dialog")).toHaveTextContent("2h 45m");
+});
+it("switches between grouped and individual blocks without changing the summaries", async () => {
+  vi.mocked(api.snapshot).mockResolvedValue(groupedData);
+  await mount();
+  fireEvent.change(screen.getByLabelText("作業ブロックの表示単位"), {
+    target: { value: "turn" },
+  });
+  await waitFor(() =>
+    expect(document.querySelectorAll(".activity-block")).toHaveLength(3),
+  );
+  expect(screen.getByTestId("total-elapsed")).toHaveTextContent("2h 15m");
+  fireEvent.click(screen.getByRole("button", { name: "日" }));
+  await waitFor(() =>
+    expect(document.querySelectorAll(".day-column")).toHaveLength(1),
+  );
+  expect(screen.getByLabelText("作業ブロックの表示単位")).toHaveValue("turn");
+  fireEvent.change(screen.getByLabelText("作業ブロックの表示単位"), {
+    target: { value: "group" },
+  });
+  await waitFor(() =>
+    expect(document.querySelectorAll(".activity-block")).toHaveLength(1),
+  );
+  expect(screen.getByTestId("total-elapsed")).toHaveTextContent("2h 15m");
+});

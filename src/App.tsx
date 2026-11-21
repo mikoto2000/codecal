@@ -12,6 +12,11 @@ import { DateTime } from "luxon";
 import { api } from "./api";
 import { useTimelineZoom } from "./useTimelineZoom";
 import {
+  groupActivity,
+  type ActivityGroup,
+  type GroupingMode,
+} from "./activity-groups";
+import {
   daysInView,
   type CalendarView,
   formatDuration,
@@ -219,6 +224,15 @@ export default function App({ initialDate }: { initialDate?: string }) {
     () => days.flatMap((d) => activity.get(d)?.segments ?? []),
     [activity, days],
   );
+  const [grouping, setGrouping] = useState<GroupingMode>("group");
+  const groups = useMemo(
+    () => (view === "month" ? [] : groupActivity(segments, grouping)),
+    [segments, grouping, view],
+  );
+  const [selectedGroup, setSelectedGroup] = useState<ActivityGroup | null>(
+    null,
+  );
+  const [returnGroup, setReturnGroup] = useState<ActivityGroup | null>(null);
   const projects = useMemo(
     () => new Map(data.projects.map((p) => [p.id, p])),
     [data.projects],
@@ -263,10 +277,22 @@ export default function App({ initialDate }: { initialDate?: string }) {
         )
         .toISODate()!,
     );
-  const openTurn = (t: Turn) => {
+  const openTurn = (t: Turn, fromGroup: ActivityGroup | null = null) => {
+    setReturnGroup(fromGroup);
+    setSelectedGroup(null);
     setSelected(t);
     setSelectedDay(null);
     setExcerpt("");
+  };
+  const openGroup = (group: ActivityGroup) => {
+    if (group.members.length === 1) {
+      openTurn(group.members[0].turn);
+      return;
+    }
+    setSelectedGroup(group);
+    setSelected(null);
+    setSelectedDay(null);
+    setReturnGroup(null);
   };
   const save = async () => {
     if (!draft) return;
@@ -492,21 +518,43 @@ export default function App({ initialDate }: { initialDate?: string }) {
           )}
           {view !== "month" ? (
             <>
-              {view === "day" && (
-                <div className="timeline-zoom-controls">
-                  <span>Ctrl＋ホイールで拡大・縮小</span>
-                  <span aria-label="タイムラインの倍率">
-                    {Math.round(dayScale * 100)}%
-                  </span>
-                  <button
-                    aria-label="タイムラインの倍率をリセット"
-                    onClick={resetTimelineZoom}
-                    disabled={dayScale === 1}
+              <div className="timeline-controls">
+                <label>
+                  表示単位{" "}
+                  <select
+                    aria-label="作業ブロックの表示単位"
+                    value={grouping}
+                    onChange={(e) =>
+                      startTransition(() =>
+                        setGrouping(e.target.value as GroupingMode),
+                      )
+                    }
                   >
-                    リセット
-                  </button>
-                </div>
-              )}
+                    <option value="group">まとめ表示</option>
+                    <option value="turn">ターン単位</option>
+                  </select>
+                </label>
+                {grouping === "group" && (
+                  <span className="grouping-hint">
+                    同じプロジェクト・間隔5分以内
+                  </span>
+                )}
+                {view === "day" && (
+                  <div className="timeline-zoom-controls">
+                    <span>Ctrl＋ホイールで拡大・縮小</span>
+                    <span aria-label="タイムラインの倍率">
+                      {Math.round(dayScale * 100)}%
+                    </span>
+                    <button
+                      aria-label="タイムラインの倍率をリセット"
+                      onClick={resetTimelineZoom}
+                      disabled={dayScale === 1}
+                    >
+                      リセット
+                    </button>
+                  </div>
+                )}
+              </div>
               <div
                 className="week-head"
                 style={{
@@ -593,40 +641,64 @@ export default function App({ initialDate }: { initialDate?: string }) {
                           </div>
                         )}
                         {packSegments(
-                          segments
-                            .filter((s) => s.date === d)
-                            .map((s) => ({
-                              ...s,
-                              top: s.top * timelineScale,
-                              height: s.unknown
+                          groups
+                            .filter((g) => g.date === d)
+                            .map((g) => ({
+                              ...g,
+                              top: g.top * timelineScale,
+                              height: g.unknown
                                 ? 22
-                                : Math.max(2, s.height * timelineScale),
+                                : Math.max(2, g.height * timelineScale),
                             })),
-                        ).map((s) => {
-                          const p = projects.get(s.turn.project_id);
-                          const times = `${localDate(s.start, zone).toFormat("HH:mm")} – ${s.unknown ? "?" : localDate(s.end, zone).toFormat(s.end === next.toMillis() ? "'24:00'" : "HH:mm")}`;
+                        ).map((g) => {
+                          const p = projects.get(g.project_id);
+                          const multiple = g.members.length > 1;
+                          const states = Object.entries(g.statuses)
+                            .map(
+                              ([status, count]) =>
+                                `${statusLabel[status as Turn["status"]]}${multiple ? ` ${count}` : ""}`,
+                            )
+                            .join(" · ");
+                          const times = `${localDate(g.start, zone).toFormat("HH:mm")} – ${g.unknown ? "?" : localDate(g.end!, zone).toFormat(g.end === next.toMillis() ? "'24:00'" : "HH:mm")}`;
+                          const details = multiple
+                            ? `${g.members.length}ターン · 実稼働 ${formatDuration(g.elapsed_ms)} · ${states}`
+                            : states;
+                          const prompt =
+                            g.members.find((m) => m.turn.prompt)?.turn.prompt ??
+                            "";
                           return (
                             <button
-                              key={`${s.turn.id}:${d}`}
-                              className={`activity-block ${s.unknown ? "unknown" : ""}`}
-                              aria-label={`${p?.name} ${times} ${statusLabel[s.turn.status]}`}
-                              title={`${p?.name}\n${times}\n${statusLabel[s.turn.status]}\n${s.turn.prompt}`}
+                              key={g.id}
+                              className={`activity-block ${g.unknown ? "unknown" : ""} ${multiple ? "grouped" : ""}`}
+                              data-turn-count={g.members.length}
+                              aria-label={`${p?.name} ${times} ${details}`}
+                              title={`${p?.name}\n${times}\n${details}\n${prompt.slice(0, 240)}`}
                               style={{
-                                top: s.top,
-                                height: s.height,
-                                left: `calc(${(s.lane / s.lanes) * 100}% + 3px)`,
-                                width: `calc(${100 / s.lanes}% - 6px)`,
+                                top: g.top,
+                                height: g.height,
+                                left: `calc(${(g.lane / g.lanes) * 100}% + 3px)`,
+                                width: `calc(${100 / g.lanes}% - 6px)`,
                                 borderColor: p?.color,
                                 background: `${p?.color ?? "#14b8a6"}26`,
                               }}
-                              onClick={() => openTurn(s.turn)}
+                              onClick={() => openGroup(g)}
                             >
-                              <strong>{p?.name ?? "Unknown"}</strong>
+                              <strong>
+                                {p?.name ?? "Unknown"}
+                                {multiple && ` · ${g.members.length}ターン`}
+                              </strong>
                               <span>
-                                {times} · {statusLabel[s.turn.status]}
+                                {times}
+                                {!multiple && ` · ${states}`}
                               </span>
-                              {s.height > 60 && (
-                                <p>{s.turn.prompt || "依頼内容なし"}</p>
+                              {multiple && g.height > 42 && (
+                                <span>
+                                  実稼働 {formatDuration(g.elapsed_ms)} ·{" "}
+                                  {states}
+                                </span>
+                              )}
+                              {g.height > (multiple ? 85 : 60) && (
+                                <p>{prompt.slice(0, 160) || "依頼内容なし"}</p>
                               )}
                             </button>
                           );
@@ -723,11 +795,80 @@ export default function App({ initialDate }: { initialDate?: string }) {
           {progress}
         </div>
       </div>
+      {selectedGroup && (
+        <Modal
+          title={`${projects.get(selectedGroup.project_id)?.name ?? "Unknown"} の作業のまとまり`}
+          close={() => setSelectedGroup(null)}
+        >
+          <dl>
+            <dt>作業ディレクトリ</dt>
+            <dd>{projects.get(selectedGroup.project_id)?.cwd}</dd>
+            <dt>表示範囲</dt>
+            <dd>
+              {dateText(selectedGroup.start)} 〜{" "}
+              {selectedGroup.end === null
+                ? "終了不明"
+                : dateText(selectedGroup.end)}
+            </dd>
+            <dt>実稼働時間帯</dt>
+            <dd>{formatDuration(selectedGroup.elapsed_ms)}</dd>
+            <dt>延べ稼働時間</dt>
+            <dd>{formatDuration(selectedGroup.total_ms)}</dd>
+            <dt>ターン数</dt>
+            <dd>{selectedGroup.members.length}ターン</dd>
+            <dt>実行状態</dt>
+            <dd>
+              {Object.entries(selectedGroup.statuses)
+                .map(
+                  ([status, count]) =>
+                    `${statusLabel[status as Turn["status"]]} ${count}`,
+                )
+                .join(" · ")}
+            </dd>
+          </dl>
+          <p className="hint">
+            表示範囲内の空白は、実稼働時間・延べ稼働時間には含めていません。
+          </p>
+          <h3>元のターン</h3>
+          <div className="day-turns group-turns">
+            {selectedGroup.members.map((m) => (
+              <button
+                key={m.turn.id}
+                onClick={() => openTurn(m.turn, selectedGroup)}
+              >
+                <span>
+                  {localDate(m.start, zone).toFormat("HH:mm")} 〜{" "}
+                  {m.unknown
+                    ? "終了不明"
+                    : localDate(m.end, zone).toFormat("HH:mm")}{" "}
+                  · {statusLabel[m.turn.status]}
+                </span>
+                <strong>{m.turn.prompt || "依頼内容なし"}</strong>
+              </button>
+            ))}
+          </div>
+        </Modal>
+      )}
       {selected && (
         <Modal
           title={projects.get(selected.project_id)?.name ?? "作業詳細"}
-          close={() => setSelected(null)}
+          close={() => {
+            setSelected(null);
+            setReturnGroup(null);
+          }}
         >
+          {returnGroup && (
+            <button
+              className="group-back"
+              onClick={() => {
+                setSelected(null);
+                setSelectedGroup(returnGroup);
+                setReturnGroup(null);
+              }}
+            >
+              作業のまとまりに戻る
+            </button>
+          )}
           <span className="status-pill">{statusLabel[selected.status]}</span>
           <dl>
             <dt>作業ディレクトリ</dt>

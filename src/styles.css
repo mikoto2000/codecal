@@ -990,3 +990,45 @@ footer,
 .week-scroll {
   overflow-anchor: none;
 }
+
+.timeline-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 7px 20px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.timeline-controls > label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.timeline-controls select {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+.timeline-controls .timeline-zoom-controls {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+}
+.group-back {
+  display: block;
+  margin-bottom: 16px;
+}
+.group-turns {
+  max-height: 400px;
+  overflow: auto;
+}
+.grouped strong {
+  font-weight: 700;
+}
+@media (max-width: 1100px) {
+  .grouping-hint {
+    display: none;
+  }
+}

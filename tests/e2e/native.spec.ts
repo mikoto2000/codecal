@@ -330,3 +330,92 @@ test("day view shows a spinner, zooms around the pointer and navigates one day",
     await stop();
   }
 });
+test("grouped activity keeps gaps out of totals and opens every original turn", async () => {
+  mkdirSync(path.join(logs, "sessions"), { recursive: true });
+  mkdirSync(appdata, { recursive: true });
+  let fixture = event(
+    "session_meta",
+    { id: "grouped-session", cwd: "C:/sample/Grouped" },
+    start,
+  );
+  for (const [id, from, to, status, prompt] of [
+    [
+      "batch-a",
+      "2026-11-20T01:00:00Z",
+      "2026-11-20T01:30:00Z",
+      "task_complete",
+      "作業A",
+    ],
+    [
+      "batch-b",
+      "2026-11-20T01:15:00Z",
+      "2026-11-20T01:45:00Z",
+      "task_failed",
+      "作業B",
+    ],
+    [
+      "batch-c",
+      "2026-11-20T01:50:00Z",
+      "2026-11-20T02:00:00Z",
+      "turn_aborted",
+      "作業C",
+    ],
+  ])
+    fixture +=
+      event("event_msg", { type: "task_started", turn_id: id }, from) +
+      event("event_msg", { type: "user_message", message: prompt }, from) +
+      event("event_msg", { type: status, turn_id: id }, to);
+  writeFileSync(path.join(logs, "sessions", "grouped.jsonl"), fixture);
+  try {
+    await launch();
+    await expect(page.getByLabel("grouped を表示")).toBeVisible();
+    for (const label of ["codecal を表示", "editor を表示"]) {
+      const checkbox = page.getByLabel(label);
+      if (await checkbox.count()) await checkbox.uncheck();
+    }
+    await page.getByLabel("表示日").fill("2026-11-20");
+    await page.getByRole("button", { name: "日", exact: true }).click();
+    await expect(page.locator(".day-column")).toHaveCount(1);
+    await expect(page.locator(".activity-block")).toHaveCount(1);
+    await expect(
+      page.getByRole("combobox", {
+        name: "作業ブロックの表示単位",
+        exact: true,
+      }),
+    ).toHaveValue("group");
+    await expect(page.getByTestId("total-elapsed")).toHaveText("0h 55m");
+    await expect(page.locator(".summary-cards")).toContainText("1h 10m");
+    await page.locator(".week-scroll").evaluate((el) => {
+      el.scrollTop = 480;
+    });
+    await page.screenshot({ path: "docs/screenshots/day-grouped.png" });
+    await page.getByRole("button", { name: /grouped.*3ターン/ }).click();
+    await expect(page.getByRole("dialog")).toContainText("0h 55m");
+    await expect(page.getByRole("dialog")).toContainText("1h 10m");
+    await expect(page.getByRole("dialog")).toContainText("完了 1");
+    await expect(page.getByRole("dialog")).toContainText("失敗 1");
+    await expect(page.getByRole("dialog")).toContainText("中断 1");
+    await page.screenshot({
+      path: "docs/screenshots/activity-group-details.png",
+    });
+    await page.getByRole("button", { name: /作業B/ }).click();
+    await expect(page.getByRole("dialog")).toContainText("batch-b");
+    await expect(page.getByRole("dialog")).toContainText("失敗");
+    await page
+      .getByRole("button", { name: "作業のまとまりに戻る", exact: true })
+      .click();
+    await expect(page.getByRole("dialog")).toContainText("作業C");
+    await page.getByRole("button", { name: "閉じる", exact: true }).click();
+    await page
+      .getByRole("combobox", { name: "作業ブロックの表示単位", exact: true })
+      .selectOption("turn");
+    await expect(page.locator(".activity-block")).toHaveCount(3);
+    await expect(page.getByTestId("total-elapsed")).toHaveText("0h 55m");
+    await page.getByRole("button", { name: "月", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "2026-11-20 0h 55m", exact: true }),
+    ).toBeVisible();
+  } finally {
+    await stop();
+  }
+});
