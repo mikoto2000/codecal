@@ -8,7 +8,15 @@ import {
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { appendFileSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
-const exe = path.resolve("src-tauri/target/release/codecal.exe");
+declare global {
+  interface Window {
+    __observedBusy: boolean;
+  }
+}
+const exe = path.resolve(
+  globalThis.process.env.CODECAL_E2E_EXE ??
+    "src-tauri/target/release/codecal.exe",
+);
 const root = path.resolve(".local", `native-${Date.now()}`);
 const logs = path.join(root, "logs");
 const appdata = path.join(root, "appdata");
@@ -141,6 +149,7 @@ test("native Tauri: import, calendars, detail, watch append and restart SQLite",
       timeout: 15000,
     });
     await page.getByRole("button", { name: "月", exact: true }).click();
+    await expect(page.getByRole("main")).toHaveAttribute("aria-busy", "false");
     await page.screenshot({ path: "docs/screenshots/month.png" });
     await stop();
     await launch();
@@ -170,7 +179,11 @@ test("native Tauri: import, calendars, detail, watch append and restart SQLite",
           "2026-11-20T04:00:00Z",
         ),
     );
-    await expect(page.getByLabel("editor を表示")).toBeVisible();
+    // Immediately after restart, creation can precede watcher attachment.
+    // The documented 30-second reconciliation scan must also be allowed.
+    await expect(page.getByLabel("editor を表示")).toBeVisible({
+      timeout: 35000,
+    });
     await expect(page.getByTestId("total-elapsed")).toHaveText("4h 0m");
     await expect(page.locator(".summary-cards")).toContainText("5h 0m");
     await page.locator(".week-scroll").evaluate((el) => {
@@ -178,6 +191,7 @@ test("native Tauri: import, calendars, detail, watch append and restart SQLite",
     });
     await page.screenshot({ path: "docs/screenshots/week.png" });
     await page.getByRole("button", { name: "月", exact: true }).click();
+    await expect(page.getByRole("main")).toHaveAttribute("aria-busy", "false");
     await page.screenshot({ path: "docs/screenshots/month.png" });
     await page.getByRole("button", { name: "設定", exact: true }).click();
     await page
@@ -185,6 +199,68 @@ test("native Tauri: import, calendars, detail, watch append and restart SQLite",
       .selectOption("dark");
     await page.getByRole("button", { name: "設定を保存", exact: true }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  } finally {
+    await stop();
+  }
+});
+
+test("month places seven columns left to right with the following week below", async () => {
+  mkdirSync(path.join(logs, "sessions"), { recursive: true });
+  mkdirSync(appdata, { recursive: true });
+  try {
+    await launch();
+    await page.getByRole("button", { name: "月", exact: true }).click();
+    await page.locator(".heatmap button").first().waitFor();
+    const cells = await page.locator(".heatmap button").evaluateAll((els) =>
+      els.slice(0, 8).map((el) => {
+        const r = el.getBoundingClientRect();
+        return { x: r.x, y: r.y };
+      }),
+    );
+    expect(cells[1].y).toBe(cells[0].y);
+    expect(cells[1].x).toBeGreaterThan(cells[0].x);
+    expect(cells[7].x).toBe(cells[0].x);
+    expect(cells[7].y).toBeGreaterThan(cells[0].y);
+  } finally {
+    await stop();
+  }
+});
+
+test("day view shows a spinner, preserves the selected date and navigates one day", async () => {
+  mkdirSync(path.join(logs, "sessions"), { recursive: true });
+  mkdirSync(appdata, { recursive: true });
+  try {
+    await launch();
+    await page.getByLabel("表示日").fill("2026-11-20");
+    await expect(page.getByRole("main")).toHaveAttribute("aria-busy", "false");
+    await page.evaluate(() => {
+      window.__observedBusy = false;
+      const main = document.querySelector("main")!;
+      new MutationObserver((records) => {
+        if (
+          records.some((r) => r.oldValue === "true") ||
+          main.getAttribute("aria-busy") === "true"
+        )
+          window.__observedBusy = true;
+      }).observe(main, {
+        attributes: true,
+        attributeOldValue: true,
+        attributeFilter: ["aria-busy"],
+      });
+    });
+    await page.getByRole("button", { name: "日", exact: true }).click();
+    await expect(page.locator(".day-column")).toHaveCount(1);
+    await expect(page.getByLabel("表示日")).toHaveValue("2026-11-20");
+    expect(await page.evaluate(() => window.__observedBusy)).toBe(true);
+    await expect(page.getByRole("main")).toHaveAttribute("aria-busy", "false");
+    await page.locator(".week-scroll").evaluate((el) => {
+      el.scrollTop = 480;
+    });
+    await page.screenshot({ path: "docs/screenshots/day.png" });
+    await page.getByRole("button", { name: "次へ", exact: true }).click();
+    await expect(page.getByLabel("表示日")).toHaveValue("2026-11-21");
+    await page.getByRole("button", { name: "前へ", exact: true }).click();
+    await expect(page.getByLabel("表示日")).toHaveValue("2026-11-20");
   } finally {
     await stop();
   }

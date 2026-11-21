@@ -626,7 +626,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
                 <div
                   className="heatmap"
                   style={{
-                    gridTemplateColumns: `repeat(${days.length / 7}, minmax(70px,1fr))`,
+                    gridTemplateRows: `repeat(${days.length / 7}, clamp(48px, calc((100vh - 610px) / ${days.length / 7}), 90px))`,
                   }}
                 >
                   {days.map((d) => {
