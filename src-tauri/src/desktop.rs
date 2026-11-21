@@ -39,6 +39,31 @@ mod tests {
         assert_eq!(c.theme, "dark");
         assert!(!c.auto_refresh);
     }
+    #[test]
+    fn missing_log_roots_warn_without_rejecting_future_directories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = Config {
+            log_root: tmp.path().display().to_string(),
+            rei_enabled: false,
+            rei_root: tmp.path().join("missing-rei").display().to_string(),
+            ..Config::default()
+        };
+        assert!(log_root_warnings(&c).is_empty());
+        c.rei_enabled = true;
+        assert_eq!(log_root_warnings(&c).len(), 1);
+        c.log_root = tmp.path().join("missing-codex").display().to_string();
+        let warnings = log_root_warnings(&c);
+        assert_eq!(warnings.len(), 2);
+        assert!(warnings[0].contains("Codex"));
+        assert!(warnings[1].contains("れい"));
+        std::fs::create_dir(&c.log_root).unwrap();
+        std::fs::create_dir(&c.rei_root).unwrap();
+        assert!(log_root_warnings(&c).is_empty());
+        let file = tmp.path().join("not-a-directory");
+        std::fs::write(&file, "").unwrap();
+        c.log_root = file.display().to_string();
+        assert_eq!(log_root_warnings(&c).len(), 1);
+    }
 }
 fn read_thresholds<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
@@ -102,8 +127,22 @@ pub async fn bootstrap(state: State<'_, AppState>, timezone: String) -> Result<B
         first_run,
     })
 }
+fn log_root_warnings(value: &Config) -> Vec<String> {
+    let mut warnings = vec![];
+    for (source, root, enabled) in [
+        ("Codex", &value.log_root, true),
+        ("れい", &value.rei_root, value.rei_enabled),
+    ] {
+        if enabled && !std::path::Path::new(root).is_dir() {
+            warnings.push(format!(
+                "{source} のログディレクトリが見つかりません: {root}"
+            ));
+        }
+    }
+    warnings
+}
 #[tauri::command]
-pub async fn save_config(state: State<'_, AppState>, value: Config) -> Result<(), String> {
+pub async fn save_config(state: State<'_, AppState>, value: Config) -> Result<Vec<String>, String> {
     if value.timezone.parse::<chrono_tz::Tz>().is_err()
         || ![0, 1].contains(&value.week_start)
         || !["system", "light", "dark"].contains(&value.theme.as_str())
@@ -115,10 +154,12 @@ pub async fn save_config(state: State<'_, AppState>, value: Config) -> Result<()
     if value.log_root.trim().is_empty() || (value.rei_enabled && value.rei_root.trim().is_empty()) {
         return Err("ログディレクトリを指定してください".into());
     }
+    let warnings = log_root_warnings(&value);
     state.store.lock().map_err(|e| e.to_string())?.set_setting(
         "config",
         &serde_json::to_string(&value).map_err(|e| e.to_string())?,
-    )
+    )?;
+    Ok(warnings)
 }
 #[tauri::command]
 pub async fn snapshot(app: tauri::AppHandle, timezone: String) -> Result<Snapshot, String> {
