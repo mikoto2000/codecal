@@ -12,7 +12,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "tauri": "tauri",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:release": "node --test scripts/release.test.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.5",
