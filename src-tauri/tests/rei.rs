@@ -19,6 +19,35 @@ fn database(root: &std::path::Path) -> Connection {
     c.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE agent_events(project_id TEXT,sequence INTEGER,id TEXT,event_type TEXT,record TEXT,PRIMARY KEY(project_id,sequence)); CREATE TABLE turns(project_id TEXT,run_id TEXT,record TEXT);").unwrap();
     c
 }
+#[test]
+fn empty_rei_directory_warns_and_recovers_when_a_source_appears() {
+    let tmp = tempfile::tempdir().unwrap();
+    let codex = tmp.path().join("codex");
+    let rei = tmp.path().join("rei");
+    fs::create_dir(&codex).unwrap();
+    fs::create_dir(&rei).unwrap();
+    let mut store = Store::open(&tmp.path().join("data.db")).unwrap();
+    let result = store.sync_sources(&codex, Some(&rei), |_, _| {}).unwrap();
+    assert_eq!(result.warnings.len(), 1);
+    assert!(result.warnings[0].contains("storage.db または projects"));
+    assert_eq!(store.snapshot("UTC").unwrap().diagnostics_total, 1);
+    assert_eq!(fs::read_dir(&rei).unwrap().count(), 0);
+    fs::create_dir(rei.join("projects")).unwrap();
+    assert!(store
+        .sync_sources(&codex, Some(&rei), |_, _| {})
+        .unwrap()
+        .warnings
+        .is_empty());
+    assert_eq!(store.snapshot("UTC").unwrap().diagnostics_total, 0);
+    fs::remove_dir(rei.join("projects")).unwrap();
+    fs::write(rei.join("storage.db"), "not a SQLite database").unwrap();
+    let result = store.sync_sources(&codex, Some(&rei), |_, _| {}).unwrap();
+    assert!(result.warnings.iter().any(|s| s.contains("storage.db")));
+    assert_eq!(
+        fs::read(rei.join("storage.db")).unwrap(),
+        b"not a SQLite database"
+    );
+}
 fn insert(c: &Connection, seq: i64, id: &str, run: &str, kind: &str, time: serde_json::Value) {
     c.execute(
         "INSERT INTO agent_events VALUES('p',?,?,?,?)",

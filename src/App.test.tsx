@@ -104,6 +104,18 @@ it("does not show first-launch guidance for a saved configuration", async () => 
     screen.queryByRole("region", { name: "はじめての設定" }),
   ).not.toBeInTheDocument();
 });
+it("makes enabled Rei import explicit in first-launch guidance", async () => {
+  const boot = await api.boot();
+  vi.mocked(api.boot).mockResolvedValue({
+    ...boot,
+    first_run: true,
+    config: { ...boot.config, rei_enabled: true },
+  });
+  await mount();
+  const setup = screen.getByRole("region", { name: "はじめての設定" });
+  expect(setup).toHaveTextContent("れい: /rei");
+  expect(setup).toHaveTextContent("れいの履歴取り込みが有効です");
+});
 it("renders weekly activity and confirmed totals", async () => {
   await mount();
   expect(screen.getByTestId("total-elapsed")).toHaveTextContent("2h 0m");
