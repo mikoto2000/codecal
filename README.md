@@ -2,6 +2,22 @@
 
 Codex CLI / Codex デスクトップのローカルセッションログを読み取り、プロジェクトごとの開発時間をカレンダーで振り返るアプリです。Windows・macOS・Linux向けに開発しています。ログの外部送信やテレメトリーはありません。
 
+## 画面例
+
+以下は合成ログを読み込んだ実際のTauriアプリです。
+
+### 週表示
+
+![週表示](docs/screenshots/week.png)
+
+### 月表示
+
+![月表示](docs/screenshots/month.png)
+
+### 日表示（まとめ表示）
+
+![1日表示（まとめ表示）](docs/screenshots/day-grouped.png)
+
 ## はじめる
 
 ### 1. ダウンロード・インストール
@@ -79,22 +95,6 @@ Codexホームを指定した場合、`sessions` と `archived_sessions` のロ�
 - **履歴が多く動作が重い**：初回取り込みや長期間の再集計に時間がかかることがあります。現在、非常に長い履歴の表示には制限があります。
 
 不具合は [Issues](https://github.com/mikoto2000/codecal/issues) へ報告できます。OS・CPU、アプリのバージョン、再現手順と診断内容を添えてください。ログやスクリーンショットを添付する際は、依頼文や個人情報を除いてください。
-
-## 画面例
-
-以下は合成ログを読み込んだ実際のTauriアプリです。
-
-### 週表示
-
-![週表示](docs/screenshots/week.png)
-
-### 月表示
-
-![月表示](docs/screenshots/month.png)
-
-### 日表示（まとめ表示）
-
-![1日表示（まとめ表示）](docs/screenshots/day-grouped.png)
 
 ## 開発・ライセンス
 
