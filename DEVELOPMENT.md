@@ -11,6 +11,7 @@ Node.jsは `.nvmrc`、npmは `package.json` の `packageManager`、Rustは `rust
 nvm install
 nvm use
 npm install --global npm@11.19.1
+rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
 rustup show
 ```
 
