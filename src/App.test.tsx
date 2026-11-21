@@ -47,6 +47,7 @@ const data: Snapshot = {
     },
   ],
   diagnostics: [],
+  diagnostics_total: 0,
 };
 beforeEach(() => {
   vi.resetAllMocks();
@@ -414,10 +415,63 @@ it("shows import diagnostics", async () => {
   vi.mocked(api.snapshot).mockResolvedValue({
     ...data,
     diagnostics: ["line 5: invalid JSON"],
+    diagnostics_total: 1,
   });
   await mount();
   fireEvent.click(screen.getByRole("button", { name: /診断/ }));
   expect(screen.getByRole("dialog")).toHaveTextContent("line 5: invalid JSON");
+});
+it("copies displayed diagnostics with their total and omitted count", async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+  try {
+    vi.mocked(api.snapshot).mockResolvedValue({
+      ...data,
+      diagnostics: ["synthetic diagnostic"],
+      diagnostics_total: 201,
+    });
+    await mount();
+    fireEvent.click(screen.getByRole("button", { name: "診断 (201)" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "表示 1 件 / 全 201 件（他 200 件は省略）",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "診断をコピー" }));
+    await screen.findByText("表示中の診断をコピーしました。");
+    expect(writeText).toHaveBeenCalledWith(
+      expect.stringContaining("synthetic diagnostic"),
+    );
+    expect(writeText).toHaveBeenCalledWith(
+      expect.stringContaining("他 200 件は省略"),
+    );
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+it("offers selectable diagnostic text when clipboard writing fails", async () => {
+  vi.stubGlobal("navigator", {
+    ...navigator,
+    clipboard: {
+      writeText: vi.fn().mockRejectedValue(new Error("unavailable")),
+    },
+  });
+  try {
+    vi.mocked(api.snapshot).mockResolvedValue({
+      ...data,
+      diagnostics: ["synthetic diagnostic"],
+      diagnostics_total: 1,
+    });
+    await mount();
+    fireEvent.click(screen.getByRole("button", { name: "診断 (1)" }));
+    fireEvent.click(screen.getByRole("button", { name: "診断をコピー" }));
+    expect(await screen.findByLabelText("コピー用の診断")).toHaveValue(
+      "表示 1 件 / 全 1 件\n\nsynthetic diagnostic",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "閉じる" }));
+    fireEvent.click(screen.getByRole("button", { name: "診断 (1)" }));
+    expect(screen.queryByLabelText("コピー用の診断")).not.toBeInTheDocument();
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });
 
 afterEach(() => vi.restoreAllMocks());

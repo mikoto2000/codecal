@@ -24,6 +24,7 @@ export type Snapshot = {
   turns: Turn[];
   days: Day[];
   diagnostics: string[];
+  diagnostics_total: number;
 };
 export type Config = {
   log_root: string;

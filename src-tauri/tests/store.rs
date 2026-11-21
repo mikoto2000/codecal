@@ -9,6 +9,29 @@ fn fixture() -> String {
  ].join("\n")+"\n"
 }
 #[test]
+fn snapshot_reports_total_when_diagnostics_are_truncated() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("logs");
+    fs::create_dir_all(&root).unwrap();
+    for i in 0..201 {
+        fs::write(root.join(format!("{i:03}.jsonl")), "not-json\n").unwrap();
+    }
+    let mut s = Store::open(&tmp.path().join("data.db")).unwrap();
+    s.sync(&root).unwrap();
+    let snapshot = s.snapshot("UTC").unwrap();
+    assert_eq!(snapshot.diagnostics_total, 201);
+    assert_eq!(snapshot.diagnostics.len(), 200);
+    assert!(snapshot.diagnostics[0].contains("000.jsonl"));
+    assert!(snapshot.diagnostics[199].contains("199.jsonl"));
+    for i in 0..201 {
+        fs::write(root.join(format!("{i:03}.jsonl")), fixture()).unwrap();
+    }
+    s.sync(&root).unwrap();
+    let snapshot = s.snapshot("UTC").unwrap();
+    assert_eq!(snapshot.diagnostics_total, 0);
+    assert!(snapshot.diagnostics.is_empty());
+}
+#[test]
 fn persists_turns_and_avoids_duplicates_across_archive_and_restart() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("logs");
