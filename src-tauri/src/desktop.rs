@@ -12,7 +12,7 @@ pub struct Config {
     pub timezone: String,
     pub week_start: u8,
     pub theme: String,
-    pub thresholds: [f64; 4],
+    pub thresholds: [f64; 3],
     pub auto_refresh: bool,
 }
 impl Default for Config {
@@ -27,7 +27,7 @@ impl Default for Config {
             timezone: "UTC".into(),
             week_start: 1,
             theme: "system".into(),
-            thresholds: [1., 3., 6., 9.],
+            thresholds: [1., 3., 6.],
             auto_refresh: true,
         }
     }
@@ -145,7 +145,9 @@ pub async fn source_excerpt(app: tauri::AppHandle, id: String) -> Result<String,
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            let dir = app.path().app_data_dir()?;
+            let dir = std::env::var_os("CODECAL_DATA_DIR")
+                .map(PathBuf::from)
+                .unwrap_or(app.path().app_data_dir()?);
             std::fs::create_dir_all(&dir)?;
             let path = dir.join("codecal.db");
             let store = Store::open(&path).map_err(std::io::Error::other)?;

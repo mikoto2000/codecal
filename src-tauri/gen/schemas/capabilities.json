@@ -1,1 +1,1 @@
-{}
+{"main":{"identifier":"main","description":"Only local event subscriptions; no frontend filesystem, network or shell access","local":true,"windows":["main"],"permissions":["core:event:allow-listen","core:event:allow-unlisten"]}}

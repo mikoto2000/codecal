@@ -136,7 +136,20 @@ impl Store {
             return Err("ログディレクトリが見つかりません".into());
         }
         let mut files: Vec<PathBuf> = vec![];
-        for e in walkdir::WalkDir::new(root).follow_links(false) {
+        let roots: Vec<PathBuf> = ["sessions", "archived_sessions"]
+            .iter()
+            .map(|name| root.join(name))
+            .filter(|p| p.is_dir())
+            .collect();
+        let roots = if roots.is_empty() {
+            vec![root.to_path_buf()]
+        } else {
+            roots
+        };
+        for e in roots
+            .iter()
+            .flat_map(|root| walkdir::WalkDir::new(root).follow_links(false))
+        {
             match e {
                 Ok(e)
                     if e.file_type().is_file()
@@ -190,6 +203,46 @@ impl Store {
             {
                 let (p, c) = r.map_err(err)?;
                 cursors.insert(p, c);
+            }
+        }
+        // A moved file retains its creation identity and prefix. Transfer its cursor
+        // only when the old pathname no longer exists (copies still deduplicate events).
+        for path in &files {
+            let new_path = path.display().to_string();
+            if cursors.contains_key(&new_path) {
+                continue;
+            }
+            let Ok(meta) = path.metadata() else { continue };
+            let identity = format!("{:?}", meta.created().ok());
+            let candidate = cursors.iter().find_map(|(old, c)| {
+                if Path::new(old).exists() || c.identity != identity || meta.len() < c.offset {
+                    return None;
+                }
+                let mut bytes = vec![0; c.head_len as usize];
+                let mut f = File::open(path).ok()?;
+                f.read_exact(&mut bytes).ok()?;
+                (hash(&bytes) == c.head).then(|| (old.clone(), c.clone()))
+            });
+            if let Some((old, cursor)) = candidate {
+                let tx = self.conn.transaction().map_err(err)?;
+                tx.execute(
+                    "UPDATE sync_state SET path=? WHERE path=?",
+                    params![new_path, old],
+                )
+                .map_err(err)?;
+                tx.execute(
+                    "UPDATE event_sources SET path=? WHERE path=?",
+                    params![new_path, old],
+                )
+                .map_err(err)?;
+                tx.execute(
+                    "UPDATE diagnostics SET path=? WHERE path=?",
+                    params![new_path, old],
+                )
+                .map_err(err)?;
+                tx.commit().map_err(err)?;
+                cursors.remove(&old);
+                cursors.insert(new_path, cursor);
             }
         }
         // Four files at a time bounds cross-session memory while parsing concurrently.
@@ -346,11 +399,9 @@ impl Store {
                             }
                         }
                         "tokens" => t.tokens = e.tokens,
-                        "completed" | "failed" | "interrupted" => {
-                            if e.timestamp >= t.start {
-                                t.end = Some(e.timestamp);
-                                t.status = e.kind;
-                            }
+                        "completed" | "failed" | "interrupted" if e.timestamp >= t.start => {
+                            t.end = Some(e.timestamp);
+                            t.status = e.kind;
                         }
                         _ => {}
                     }
