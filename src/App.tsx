@@ -119,6 +119,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
     [syncing, setSyncing] = useState(false),
     [saving, setSaving] = useState(false),
     [settingsError, setSettingsError] = useState(""),
+    [settingsWarning, setSettingsWarning] = useState<string[]>([]),
     [error, setError] = useState(""),
     [progress, setProgress] = useState(""),
     [notice, setNotice] = useState("");
@@ -301,14 +302,17 @@ export default function App({ initialDate }: { initialDate?: string }) {
   const openSettings = () => {
     setDraft(config);
     setSettingsError("");
+    setSettingsWarning([]);
     setShowSettings(true);
   };
   const save = async () => {
     if (!draft || saving) return;
     setSettingsError("");
+    setSettingsWarning([]);
     setSaving(true);
+    let warnings: string[];
     try {
-      await api.save(draft);
+      warnings = await api.save(draft);
     } catch (e) {
       setSettingsError(String(e));
       return;
@@ -320,12 +324,14 @@ export default function App({ initialDate }: { initialDate?: string }) {
       `解析対象: Codex ${draft.log_root}${draft.rei_enabled ? ` / れい ${draft.rei_root}` : ""}  ·  保存先: ${dbPath}`,
     );
     zoneRef.current = draft.timezone;
-    setShowSettings(false);
+    setSettingsWarning(warnings);
+    if (warnings.length === 0) setShowSettings(false);
     try {
       await reload(draft.timezone);
       await synchronize();
     } catch (e) {
-      setError(String(e));
+      if (warnings.length) setSettingsError(String(e));
+      else setError(String(e));
     }
   };
   const dateText = (ms: number) =>
@@ -1003,6 +1009,19 @@ export default function App({ initialDate }: { initialDate?: string }) {
       {showSettings && draft && (
         <Modal title="設定" close={() => setShowSettings(false)}>
           {settingsError && <p role="alert">{settingsError}</p>}
+          {settingsWarning.length > 0 && (
+            <div role="alert">
+              <p>設定は保存しましたが、取り込み先を確認してください。</p>
+              <ul>
+                {settingsWarning.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
+              <p>
+                パスを修正するか、ディレクトリを用意してから同期してください。
+              </p>
+            </div>
+          )}
           <form
             className="settings-form"
             onSubmit={(e) => {

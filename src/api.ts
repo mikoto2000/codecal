@@ -11,7 +11,7 @@ export const api = {
     invoke<{ files: number; bytes_read: number; warnings: string[] }>(
       "sync_logs",
     ),
-  save: (value: Config) => invoke<void>("save_config", { value }),
+  save: (value: Config) => invoke<string[]>("save_config", { value }),
   project: (id: string, name: string, color: string) =>
     invoke<void>("update_project", { id, name, color }),
   excerpt: (id: string) => invoke<string>("source_excerpt", { id }),

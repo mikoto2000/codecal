@@ -71,7 +71,7 @@ beforeEach(() => {
     warnings: [],
   });
   vi.mocked(api.events).mockResolvedValue(() => {});
-  vi.mocked(api.save).mockResolvedValue();
+  vi.mocked(api.save).mockResolvedValue([]);
 });
 const mount = async () => {
   render(<App initialDate="2026-11-20" />);
@@ -223,6 +223,32 @@ it("shows refresh failures after a successful settings save in the workspace", a
     "更新に失敗しました",
   );
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+it("shows missing-directory warnings inside settings after saving", async () => {
+  vi.mocked(api.save).mockResolvedValueOnce([
+    "Codex のログディレクトリが見つかりません: /missing",
+  ]);
+  await mount();
+  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  fireEvent.change(screen.getByLabelText("Codex ログディレクトリ"), {
+    target: { value: "/missing" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
+  const dialog = screen.getByRole("dialog", { name: "設定" });
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "設定は保存しました",
+  );
+  expect(dialog).toHaveTextContent("/missing");
+  expect(screen.getByLabelText("Codex ログディレクトリ")).toHaveValue(
+    "/missing",
+  );
+  fireEvent.change(screen.getByLabelText("Codex ログディレクトリ"), {
+    target: { value: "/logs" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+  );
 });
 it("saves the Rei source independently of Codex", async () => {
   await mount();
