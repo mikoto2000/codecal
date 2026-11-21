@@ -17,7 +17,7 @@ pub struct Day {
 pub fn union_ms(ranges: &mut [(i64, i64)]) -> i64 {
     ranges.sort_unstable();
     let mut total = 0;
-    let mut current = None;
+    let mut current: Option<(i64, i64)> = None;
     for &(s, e) in ranges.iter().filter(|(s, e)| e > s) {
         match current {
             Some((a, b)) if s <= b => current = Some((a, b.max(e))),
