@@ -11,7 +11,14 @@ pub struct Event {
     pub tokens: Option<i64>,
 }
 fn text_content(v: &Value) -> Option<String> {
-    v.as_array().map(|a| a.iter().filter_map(|i| i.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n")).filter(|s| !s.is_empty())
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|i| i.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .filter(|s| !s.is_empty())
 }
 pub fn parse_line(line: &str) -> Result<Option<Event>, String> {
     let v: Value = serde_json::from_str(line).map_err(|_| "invalid JSON".to_string())?;
@@ -27,13 +34,43 @@ pub fn parse_line(line: &str) -> Result<Option<Event>, String> {
         ("event_msg", "task_failed" | "turn_failed") => "failed",
         ("event_msg", "user_message") => "prompt",
         ("response_item", "message") if p["role"] == "user" => "prompt",
-        ("event_msg", "item_completed") if p["item"]["type"] == "user_message" || p["item"]["type"] == "userMessage" => "prompt",
+        ("event_msg", "item_completed")
+            if p["item"]["type"] == "user_message" || p["item"]["type"] == "userMessage" =>
+        {
+            "prompt"
+        }
         ("token_usage_record", _) => "tokens",
         _ => return Ok(None),
     };
-    let timestamp = v["timestamp"].as_str().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()).ok_or("missing or invalid timestamp")?.timestamp_millis();
+    let timestamp = v["timestamp"]
+        .as_str()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .ok_or("missing or invalid timestamp")?
+        .timestamp_millis();
     let string = |key: &str| p[key].as_str().map(str::to_owned);
-    let turn_id = string("turn_id").or_else(|| p["internal_chat_message_metadata_passthrough"]["turn_id"].as_str().map(str::to_owned));
-    let text = if kind == "prompt" { string("message").or_else(|| text_content(&p["content"])).or_else(|| text_content(&p["item"]["content"])) } else { None };
-    Ok(Some(Event { timestamp, kind: kind.into(), session_id: if kind == "meta" { string("id").or_else(|| string("session_id")) } else { None }, turn_id, cwd: string("cwd"), text: text.map(|s| s.chars().take(16384).collect()), tokens: p["turn_token_usage"]["total_tokens"].as_i64() }))
+    let turn_id = string("turn_id").or_else(|| {
+        p["internal_chat_message_metadata_passthrough"]["turn_id"]
+            .as_str()
+            .map(str::to_owned)
+    });
+    let text = if kind == "prompt" {
+        string("message")
+            .or_else(|| text_content(&p["content"]))
+            .or_else(|| text_content(&p["item"]["content"]))
+    } else {
+        None
+    };
+    Ok(Some(Event {
+        timestamp,
+        kind: kind.into(),
+        session_id: if kind == "meta" {
+            string("id").or_else(|| string("session_id"))
+        } else {
+            None
+        },
+        turn_id,
+        cwd: string("cwd"),
+        text: text.map(|s| s.chars().take(16384).collect()),
+        tokens: p["turn_token_usage"]["total_tokens"].as_i64(),
+    }))
 }
