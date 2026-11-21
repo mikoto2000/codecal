@@ -601,7 +601,6 @@ fn read_delta(path: &Path, previous: Option<&Cursor>) -> Result<Delta, String> {
                         .take(65536)
                         .read_until(b'\n', &mut discard)
                         .map_err(err)?;
-                    buf.extend_from_slice(&[]);
                     offset += n as u64;
                     if n == 0 || discard.last() == Some(&b'\n') {
                         break;

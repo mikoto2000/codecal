@@ -180,7 +180,9 @@ test("native Tauri: import, calendars, detail, watch append and restart SQLite",
     await page.getByRole("button", { name: "月", exact: true }).click();
     await page.screenshot({ path: "docs/screenshots/month.png" });
     await page.getByRole("button", { name: "設定", exact: true }).click();
-    await page.getByLabel("テーマ", { exact: true }).selectOption("dark");
+    await page
+      .getByRole("combobox", { name: "テーマ", exact: true })
+      .selectOption("dark");
     await page.getByRole("button", { name: "設定を保存", exact: true }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   } finally {

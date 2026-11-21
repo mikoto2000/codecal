@@ -155,11 +155,16 @@ pub async fn source_excerpt(app: tauri::AppHandle, id: String) -> Result<String,
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            let dir = std::env::var_os("CODECAL_DATA_DIR")
-                .map(PathBuf::from)
-                .unwrap_or(app.path().app_data_dir()?);
-            std::fs::create_dir_all(&dir)?;
-            let path = dir.join("codecal.db");
+            let path = if let Some(dir) = std::env::var_os("CODECAL_DATA_DIR") {
+                let dir = PathBuf::from(dir);
+                crate::storage::prepare_database(&dir, &dir)
+            } else {
+                crate::storage::prepare_database(
+                    &app.path().app_local_data_dir()?,
+                    &app.path().app_data_dir()?,
+                )
+            }
+            .map_err(std::io::Error::other)?;
             let store = Store::open(&path).map_err(std::io::Error::other)?;
             app.manage(AppState {
                 store: Mutex::new(store),

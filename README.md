@@ -14,7 +14,7 @@ Windows 11 x64 と Microsoft Edge WebView2 Runtime が必要です。生成し�
 
 起動すると対象ディレクトリと保存先が画面下部に表示され、ログの取り込みが始まります。既定では `CODEX_HOME`、未設定ならユーザーホームの `.codex` を参照します。ホーム内の `sessions` と `archived_sessions` が対象です。「設定」のログディレクトリには Codex ホームまたは JSONL を含む専用ディレクトリを指定できます。
 
-データベースは Tauri のユーザー別アプリデータディレクトリ `dev.codecal.desktop/codecal.db` に保存します。設定画面に絶対パスを表示します。環境変数 `CODECAL_DATA_DIR` で保存先を変更でき、合成ログによる検証や持ち運び用データの隔離にも利用できます。
+データベースは Tauri のユーザー別ローカルアプリデータディレクトリ `dev.codecal.desktop/codecal.db` に保存します。設定画面に絶対パスを表示します。 Windowsの既定は `%LOCALAPPDATA%\dev.codecal.desktop\codecal.db`（通常 `C:\Users\<ユーザー名>\AppData\Local\dev.codecal.desktop\codecal.db`）です。以前のRoaming保存先にDBがあり、Local側が未作成の場合は、初回起動でSQLiteの整合したスナップショットを自動移行します。旧DBは残し、既存Local DBは上書きしません。 macOSでは `~/Library/Application Support/dev.codecal.desktop/codecal.db`、Linuxでは `${XDG_DATA_HOME:-~/.local/share}/dev.codecal.desktop/codecal.db` が既定です（両OSの起動は未検証）。環境変数 `CODECAL_DATA_DIR` で保存先を変更でき、合成ログによる検証や持ち運び用データの隔離にも利用できます。
 
 ## 使い方
 
