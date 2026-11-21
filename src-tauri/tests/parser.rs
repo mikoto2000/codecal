@@ -39,6 +39,6 @@ fn recognizes_metadata_context_prompt_tokens_and_interruptions() {
 
 #[test]
 fn reads_current_desktop_user_items() {
- let e=parse_line(r#"{"timestamp":"2026-11-20T10:00:01Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"t1","item":{"type":"UserMessage","content":[{"type":"Text","text":"依頼"}]}}}"#).unwrap().unwrap();
- assert_eq!(e.text.as_deref(),Some("依頼"));
+    let e=parse_line(r#"{"timestamp":"2026-11-20T10:00:01Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"t1","item":{"type":"UserMessage","content":[{"type":"Text","text":"依頼"}]}}}"#).unwrap().unwrap();
+    assert_eq!(e.text.as_deref(), Some("依頼"));
 }

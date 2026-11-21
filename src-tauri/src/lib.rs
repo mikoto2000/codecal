@@ -1,5 +1,7 @@
 pub mod activity;
+#[cfg(feature = "desktop")]
+mod desktop;
 pub mod parser;
 pub mod store;
-#[cfg(feature = "desktop")] mod desktop;
-#[cfg(feature = "desktop")] pub use desktop::run;
+#[cfg(feature = "desktop")]
+pub use desktop::run;
