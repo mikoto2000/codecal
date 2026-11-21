@@ -5,6 +5,9 @@ import path from "node:path";
 const root = path.resolve(process.argv[2] ?? ".local/sample-codex");
 const line = (type, payload, timestamp) =>
   JSON.stringify({ type, payload, timestamp }) + "\n";
+mkdirSync(path.join(root, "sessions"), { recursive: true });
+let created = 0;
+let skipped = 0;
 for (const [id, cwd, start, end, prompt] of [
   [
     "calendar",
@@ -28,14 +31,21 @@ for (const [id, cwd, start, end, prompt] of [
     "日付をまたぐビルドを検証する",
   ],
 ]) {
-  mkdirSync(path.join(root, "sessions"), { recursive: true });
   const data =
     line("session_meta", { id, cwd }, start) +
     line("event_msg", { type: "task_started", turn_id: id + "-turn" }, start) +
     line("event_msg", { type: "user_message", message: prompt }, start) +
     line("event_msg", { type: "task_complete", turn_id: id + "-turn" }, end);
-  writeFileSync(path.join(root, "sessions", id + ".jsonl"), data, {
-    flag: "wx",
-  });
+  try {
+    writeFileSync(path.join(root, "sessions", id + ".jsonl"), data, {
+      flag: "wx",
+    });
+    created++;
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    skipped++;
+  }
 }
-console.log(`合成ログ: ${root} (2026-11-20 / Asia/Tokyo)`);
+console.log(
+  `合成ログ: ${root} (2026-11-20 / Asia/Tokyo) · 作成 ${created} 件 · 既存のためスキップ ${skipped} 件`,
+);
