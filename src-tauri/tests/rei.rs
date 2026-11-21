@@ -239,8 +239,11 @@ fn failing_source_does_not_block_the_other_provider_or_legacy() {
     )
     .unwrap();
     let mut s = Store::open(&tmp.path().join("data.db")).unwrap();
-    s.sync_sources(&tmp.path().join("missing-codex"), Some(&root), |_, _| {})
+    let result = s
+        .sync_sources(&tmp.path().join("missing-codex"), Some(&root), |_, _| {})
         .unwrap();
+    assert!(result.warnings.iter().any(|w| w.starts_with("Codex:")));
+    assert!(result.warnings.iter().any(|w| w.contains("storage.db")));
     let a = s.snapshot("UTC").unwrap();
     assert_eq!(a.turns.len(), 1);
     assert!(a.diagnostics.len() >= 2);
@@ -249,9 +252,26 @@ fn failing_source_does_not_block_the_other_provider_or_legacy() {
     fs::write(codex.join("s.jsonl"),concat!(
         "{\"timestamp\":\"2026-11-20T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"s\",\"cwd\":\"/work\"}}\n",
         "{\"timestamp\":\"2026-11-20T10:00:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"r\"}}\n")).unwrap();
-    s.sync_sources(&codex, Some(&tmp.path().join("missing-rei")), |_, _| {})
+    let result = s
+        .sync_sources(&codex, Some(&tmp.path().join("missing-rei")), |_, _| {})
         .unwrap();
+    assert!(result.warnings.iter().any(|w| w.starts_with("れい:")));
     assert_eq!(s.snapshot("UTC").unwrap().turns.len(), 2);
+}
+
+#[test]
+fn sync_warnings_describe_only_the_current_attempt() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = Store::open(&tmp.path().join("data.db")).unwrap();
+    let codex = tmp.path().join("codex");
+    let rei = tmp.path().join("rei");
+    let result = s.sync_sources(&codex, Some(&rei), |_, _| {}).unwrap();
+    assert_eq!(result.files, 0);
+    assert_eq!(result.warnings.len(), 2);
+    fs::create_dir(&codex).unwrap();
+    let result = s.sync_sources(&codex, None, |_, _| {}).unwrap();
+    assert!(result.warnings.is_empty());
+    assert!(!s.snapshot("UTC").unwrap().diagnostics.is_empty());
 }
 
 #[test]

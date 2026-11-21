@@ -7,7 +7,10 @@ export const api = {
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     }),
   snapshot: (timezone: string) => invoke<Snapshot>("snapshot", { timezone }),
-  sync: () => invoke<{ files: number; bytes_read: number }>("sync_logs"),
+  sync: () =>
+    invoke<{ files: number; bytes_read: number; warnings: string[] }>(
+      "sync_logs",
+    ),
   save: (value: Config) => invoke<void>("save_config", { value }),
   project: (id: string, name: string, color: string) =>
     invoke<void>("update_project", { id, name, color }),

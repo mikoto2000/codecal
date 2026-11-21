@@ -64,7 +64,11 @@ beforeEach(() => {
     first_run: true,
   });
   vi.mocked(api.snapshot).mockResolvedValue(data);
-  vi.mocked(api.sync).mockResolvedValue({ files: 1, bytes_read: 10 });
+  vi.mocked(api.sync).mockResolvedValue({
+    files: 1,
+    bytes_read: 10,
+    warnings: [],
+  });
   vi.mocked(api.events).mockResolvedValue(() => {});
   vi.mocked(api.save).mockResolvedValue();
 });
@@ -142,6 +146,30 @@ it("shows recoverable backend errors", async () => {
   vi.mocked(api.boot).mockRejectedValue(new Error("synthetic error"));
   render(<App />);
   expect(await screen.findByRole("alert")).toHaveTextContent("synthetic error");
+});
+it("shows partial import failures and clears them after a successful retry", async () => {
+  vi.mocked(api.sync).mockResolvedValueOnce({
+    files: 1,
+    bytes_read: 10,
+    warnings: ["Codex: ログディレクトリが見つかりません"],
+  });
+  vi.mocked(api.snapshot).mockResolvedValue({
+    ...data,
+    diagnostics: ["過去の診断"],
+  });
+  await mount();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Codex: ログディレクトリが見つかりません",
+  );
+  expect(screen.getByText("要確認")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "診断を見る" }));
+  expect(screen.getByRole("dialog")).toHaveTextContent("過去の診断");
+  fireEvent.click(screen.getByRole("button", { name: "閉じる" }));
+  fireEvent.click(screen.getByRole("button", { name: /同期/ }));
+  await waitFor(() =>
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+  );
+  expect(screen.getByText("同期済み")).toBeInTheDocument();
 });
 it("saves theme and timezone configuration", async () => {
   await mount();

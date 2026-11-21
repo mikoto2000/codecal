@@ -31,7 +31,7 @@ SQLiteの `turns` に対応するrunIdがあればrequestを補完し、後か�
 
 `rei_event_sources` はevent_id/path/project/native_id/offsetを保持します。SQLiteではoffsetはNULLです。詳細ではDBに記録された出典だけを解決し、SQLiteはproject IDとevent IDで照会、JSONLはオフセットとevent IDで照合します。一方の出典が消えた場合は別の出典を試します。表示は最大64KiBです。
 
-自動同期はCodexとれいの両ディレクトリを監視します。SQLite本体・WAL・プロジェクト台帳・JSONLの変更を検知し、600ms debounce、最大5秒、30秒の補完走査を使います。一方の取得元が読めなくても他方は同期し、問題は診断へ記録します。
+自動同期はCodexとれいの両ディレクトリを監視します。SQLite本体・WAL・プロジェクト台帳・JSONLの変更を検知し、600ms debounce、最大5秒、30秒の補完走査を使います。一方の取得元が読めなくても他方は同期し、問題は診断へ記録します。取得元やファイルの読み取り失敗は画面にも表示し、設定・診断を開けます。手動同期では今回の失敗を表示し、過去の診断や解析対象外イベントの読み飛ばしだけで失敗扱いにはしません。
 
 ## 検証
 

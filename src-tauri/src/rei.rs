@@ -230,12 +230,14 @@ impl Store {
         if !root.is_dir() {
             return Err("れいのデータディレクトリが見つかりません".into());
         }
+        let mut warnings = vec![];
         let map = match projects(root) {
             Ok(p) => {
                 self.rei_diagnostic(&root.join("projects.json"), None)?;
                 p
             }
             Err(e) => {
+                warnings.push(format!("れい: projects.json: {e}"));
                 self.rei_diagnostic(&root.join("projects.json"), Some(&e))?;
                 BTreeMap::new()
             }
@@ -243,6 +245,7 @@ impl Store {
         let mut progress = Progress {
             files: 0,
             bytes_read: 0,
+            warnings,
         };
         let db = root.join("storage.db");
         if db.is_file() {
@@ -252,7 +255,10 @@ impl Store {
                     progress.bytes_read += bytes;
                     self.rei_diagnostic(&db, None)?;
                 }
-                Err(e) => self.rei_diagnostic(&db, Some(&e))?,
+                Err(e) => {
+                    self.rei_diagnostic(&db, Some(&e))?;
+                    progress.warnings.push(format!("れい: storage.db: {e}"));
+                }
             }
         }
         let dirs = root.join("projects");
@@ -260,6 +266,9 @@ impl Store {
             let entries = match std::fs::read_dir(&dirs) {
                 Ok(entries) => Some(entries),
                 Err(_) => {
+                    progress
+                        .warnings
+                        .push("れい: 旧ログディレクトリを読み取れません".into());
                     self.rei_diagnostic(&dirs, Some("れいの旧ログディレクトリを読み取れません"))?;
                     None
                 }
@@ -268,6 +277,9 @@ impl Store {
                 let entry = match entry {
                     Ok(entry) => entry,
                     Err(_) => {
+                        progress
+                            .warnings
+                            .push("れい: 旧ログ項目を読み取れません".into());
                         self.rei_diagnostic(&dirs, Some("れいの旧ログ項目を読み取れません"))?;
                         continue;
                     }
@@ -282,7 +294,12 @@ impl Store {
                 progress.files += 1;
                 match self.rei_jsonl(&file, &entry.file_name().to_string_lossy(), &map) {
                     Ok(bytes) => progress.bytes_read += bytes,
-                    Err(e) => self.rei_diagnostic(&file, Some(&e))?,
+                    Err(e) => {
+                        self.rei_diagnostic(&file, Some(&e))?;
+                        progress
+                            .warnings
+                            .push(format!("れい: {}: {e}", file.display()));
+                    }
                 }
             }
         }

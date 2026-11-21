@@ -147,7 +147,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
       setProgress(
         `${result.files} ファイル確認 · ${Math.round(result.bytes_read / 1024)} KB 読み込み`,
       );
-      setError("");
+      setError(result.warnings.join("\n"));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -296,6 +296,10 @@ export default function App({ initialDate }: { initialDate?: string }) {
     setSelectedDay(null);
     setReturnGroup(null);
   };
+  const openSettings = () => {
+    setDraft(config);
+    setShowSettings(true);
+  };
   const save = async () => {
     if (!draft) return;
     try {
@@ -370,10 +374,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
           <button
             className="settings-button"
             aria-label="設定"
-            onClick={() => {
-              setDraft(config);
-              setShowSettings(true);
-            }}
+            onClick={openSettings}
             disabled={!config}
           >
             ⚙ 設定
@@ -391,7 +392,13 @@ export default function App({ initialDate }: { initialDate?: string }) {
               className={`sync-state ${syncing ? "busy" : ""}`}
               role="status"
             >
-              {loading ? "読み込み中" : syncing ? "同期中" : "同期済み"}
+              {loading
+                ? "読み込み中"
+                : syncing
+                  ? "同期中"
+                  : error
+                    ? "要確認"
+                    : "同期済み"}
             </span>
             <button
               onClick={() => void synchronize()}
@@ -427,6 +434,10 @@ export default function App({ initialDate }: { initialDate?: string }) {
         {error && (
           <div role="alert" className="error-banner">
             {error}
+            <button onClick={openSettings} disabled={!config}>
+              設定を開く
+            </button>
+            <button onClick={() => setShowDiagnostics(true)}>診断を見る</button>
             <button aria-label="エラーを閉じる" onClick={() => setError("")}>
               ×
             </button>
