@@ -89,7 +89,23 @@ jobs:
           }
           if (!$runtimeVersion) { throw 'WebView2 Runtime is not installed' }
           Write-Output "WebView2 Runtime: $runtimeVersion"
+      - name: Configure WebView2 debugging for elevated E2E
+        shell: pwsh
+        run: |
+          # Runtime 150+ ignores WEBVIEW2_* and HKCU overrides in elevated hosts.
+          # https://github.com/MicrosoftEdge/WebView2Feedback/issues/5645
+          $policy = 'HKLM:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+          New-Item -Path $policy -Force | Out-Null
+          New-ItemProperty -Path $policy -Name 'codecal.exe' -Value '--remote-debugging-port=9223' -PropertyType String -Force | Out-Null
       - run: npm run test:e2e
+      - name: Remove E2E debugging policy
+        if: always()
+        shell: pwsh
+        run: |
+          $policy = 'HKLM:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+          if (Test-Path $policy) {
+            Remove-ItemProperty -Path $policy -Name 'codecal.exe' -ErrorAction SilentlyContinue
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: CodeCal-windows-x64
