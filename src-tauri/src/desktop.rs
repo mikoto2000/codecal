@@ -166,10 +166,32 @@ pub fn run() {
             }
             .map_err(std::io::Error::other)?;
             let store = Store::open(&path).map_err(std::io::Error::other)?;
+            let state_file = std::fs::canonicalize(&path)?.with_file_name("window-state.json");
+            app.handle().plugin(
+                tauri_plugin_window_state::Builder::default()
+                    .with_filename(state_file.to_string_lossy().into_owned())
+                    .with_state_flags(
+                        tauri_plugin_window_state::StateFlags::SIZE
+                            | tauri_plugin_window_state::StateFlags::POSITION
+                            | tauri_plugin_window_state::StateFlags::MAXIMIZED
+                            | tauri_plugin_window_state::StateFlags::VISIBLE,
+                    )
+                    .build(),
+            )?;
+
             app.manage(AppState {
                 store: Mutex::new(store),
                 db_path: path.display().to_string(),
             });
+            // Register window-state before creating the main window so its
+            // ready callback restores geometry and installs event tracking.
+            let window_config = app
+                .config()
+                .app
+                .windows
+                .first()
+                .ok_or("main window configuration missing")?;
+            tauri::WebviewWindowBuilder::from_config(app.handle(), window_config)?.build()?;
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 use notify::{RecursiveMode, Watcher};
