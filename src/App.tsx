@@ -547,8 +547,30 @@ export default function App({ initialDate }: { initialDate?: string }) {
               />
             </div>
           </div>
-          {!loading && summary.count === 0 && (
-            <p className="empty-state">表示期間の稼働はありません</p>
+          {!loading && !syncing && summary.count === 0 && (
+            <div className="empty-state">
+              {data.turns.length === 0 ? (
+                <>
+                  <p>取り込まれた稼働履歴がありません</p>
+                  <p>ログディレクトリと診断を確認してください。</p>
+                  <button onClick={openSettings} disabled={!config}>
+                    設定を開く
+                  </button>
+                  <button onClick={() => setShowDiagnostics(true)}>
+                    診断を見る
+                  </button>
+                </>
+              ) : filtered.length === 0 ? (
+                <>
+                  <p>表示するプロジェクトが選択されていません</p>
+                  <button onClick={() => setHidden(new Set())}>
+                    すべてのプロジェクトを表示
+                  </button>
+                </>
+              ) : (
+                <p>表示期間の稼働はありません</p>
+              )}
+            </div>
           )}
           {view !== "month" ? (
             <>

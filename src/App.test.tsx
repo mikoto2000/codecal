@@ -109,10 +109,20 @@ it("navigates weeks and returns to a chosen date", async () => {
 });
 it("filters projects", async () => {
   await mount();
+  await screen.findByText("同期済み");
   fireEvent.click(screen.getByLabelText("Sample project を表示"));
   expect(
     screen.queryByRole("button", { name: /Sample project.*10:00/ }),
   ).not.toBeInTheDocument();
+  expect(
+    screen.getByText("表示するプロジェクトが選択されていません"),
+  ).toBeInTheDocument();
+  fireEvent.click(
+    screen.getByRole("button", { name: "すべてのプロジェクトを表示" }),
+  );
+  expect(
+    screen.getByRole("button", { name: /Sample project.*10:00/ }),
+  ).toBeInTheDocument();
 });
 it("renders heatmap and navigates from a selected day to week", async () => {
   await mount();
@@ -135,8 +145,21 @@ it("shows empty state", async () => {
   });
   render(<App initialDate="2026-11-20" />);
   expect(
+    await screen.findByText("取り込まれた稼働履歴がありません"),
+  ).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "診断を見る" }));
+  expect(
+    screen.getByRole("dialog", { name: "取り込み診断" }),
+  ).toBeInTheDocument();
+});
+it("distinguishes a period with no activity from an empty import", async () => {
+  render(<App initialDate="2026-12-20" />);
+  expect(
     await screen.findByText("表示期間の稼働はありません"),
   ).toBeInTheDocument();
+  expect(
+    screen.queryByText("取り込まれた稼働履歴がありません"),
+  ).not.toBeInTheDocument();
 });
 it("shows loading state", () => {
   vi.mocked(api.boot).mockReturnValue(new Promise(() => {}));
