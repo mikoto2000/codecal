@@ -342,6 +342,62 @@ it("saves the Rei source independently of Codex", async () => {
     ),
   );
 });
+it.each([
+  ["テーマ", "dark"],
+  ["週の開始曜日", "0"],
+  ["タイムゾーン", "Asia/Tokyo"],
+  ["しきい値 1", "0.5"],
+])(
+  "refreshes display settings without scanning logs: %s",
+  async (label, value) => {
+    await mount();
+    await screen.findByText("同期済み");
+    vi.mocked(api.sync).mockClear();
+    vi.mocked(api.snapshot).mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "設定" }));
+    fireEvent.change(screen.getByLabelText(label, { exact: true }), {
+      target: { value },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
+    await waitFor(() => expect(api.snapshot).toHaveBeenCalledTimes(1));
+    await act(async () => {});
+    expect(api.sync).not.toHaveBeenCalled();
+  },
+);
+it("does not scan for auto-refresh or unchanged saves, but does scan for source changes", async () => {
+  await mount();
+  await screen.findByText("同期済み");
+  vi.mocked(api.sync).mockClear();
+  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  fireEvent.click(screen.getByLabelText("自動更新を有効にする"));
+  fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+  );
+  expect(api.sync).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+  );
+  expect(api.sync).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  fireEvent.change(screen.getByLabelText("Codex ログディレクトリ"), {
+    target: { value: "/other" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
+  await waitFor(() => expect(api.sync).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  fireEvent.click(screen.getByLabelText("れいの実行履歴を取り込む"));
+  fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
+  await waitFor(() => expect(api.sync).toHaveBeenCalledTimes(2));
+  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  fireEvent.change(screen.getByLabelText("れい データディレクトリ"), {
+    target: { value: "/other-rei" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
+  await waitFor(() => expect(api.sync).toHaveBeenCalledTimes(3));
+});
 it("shows Rei attribution and its request in the activity detail", async () => {
   vi.mocked(api.snapshot).mockResolvedValue({
     ...data,
