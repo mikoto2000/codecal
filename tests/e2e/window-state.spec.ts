@@ -51,7 +51,14 @@ async function launch() {
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=9223",
     },
   });
-  child.on("error", () => {});
+  let launchError = "";
+  let stderr = "";
+  child.on("error", (error) => {
+    launchError = error.message;
+  });
+  child.stderr?.on("data", (chunk) => {
+    stderr = (stderr + String(chunk)).slice(-8192);
+  });
   await expect
     .poll(
       async () => {
@@ -63,7 +70,13 @@ async function launch() {
       },
       { timeout: 20000 },
     )
-    .toBe(true);
+    .toBe(true)
+    .catch((cause) => {
+      throw new Error(
+        `WebView2 debugging did not start: ${exe}; exit=${child.exitCode}; spawn=${launchError}; stderr=${stderr}`,
+        { cause },
+      );
+    });
   browser = await chromium.connectOverCDP("http://127.0.0.1:9223");
   await expect
     .poll(() => browser.contexts().flatMap((c) => c.pages()).length)
@@ -143,7 +156,11 @@ test("window state restores position size and maximization after normal restart"
     saveFixture({ ...saved, maximized: true });
     await launch();
     const maximized = await geometry();
-    expect(maximized.width).toBeGreaterThan(first.width);
+    const availableWidth = await page.evaluate(() =>
+      Math.round(screen.availWidth * devicePixelRatio),
+    );
+    // A maximized window can be narrower than a saved window on a small monitor.
+    expect(Math.abs(maximized.width - availableWidth)).toBeLessThanOrEqual(2);
     await closeNormally();
     expect(JSON.parse(readFileSync(stateFile, "utf-8")).main.maximized).toBe(
       true,

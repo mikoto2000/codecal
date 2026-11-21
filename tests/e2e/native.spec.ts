@@ -37,7 +37,14 @@ async function launch() {
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=9223",
     },
   });
-  process.on("error", () => {});
+  let launchError = "";
+  let stderr = "";
+  process.on("error", (error) => {
+    launchError = error.message;
+  });
+  process.stderr?.on("data", (chunk) => {
+    stderr = (stderr + String(chunk)).slice(-8192);
+  });
   await expect
     .poll(
       async () => {
@@ -50,13 +57,26 @@ async function launch() {
       },
       { timeout: 20000 },
     )
-    .toBe(true);
+    .toBe(true)
+    .catch((cause) => {
+      throw new Error(
+        `WebView2 debugging did not start: ${exe}; exit=${process.exitCode}; spawn=${launchError}; stderr=${stderr}`,
+        { cause },
+      );
+    });
   browser = await chromium.connectOverCDP("http://127.0.0.1:9223");
   await expect
     .poll(() => browser.contexts().flatMap((c) => c.pages()).length)
     .toBeGreaterThan(0);
   page = browser.contexts().flatMap((c) => c.pages())[0];
   await page.waitForLoadState("domcontentloaded");
+  // Fixture times and labels use Japan time; CI runners usually use UTC.
+  await page.getByRole("button", { name: "設定", exact: true }).click();
+  await page.getByLabel("タイムゾーン", { exact: true }).fill("Asia/Tokyo");
+  await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+  await expect(
+    page.getByRole("dialog", { name: "設定", exact: true }),
+  ).not.toBeVisible();
 }
 async function stop() {
   await browser?.close();
@@ -72,6 +92,8 @@ async function stop() {
   }
 }
 test("native Tauri: import, calendars, detail, watch append and restart SQLite", async () => {
+  // Includes a 35-second watcher reconciliation allowance and native restarts.
+  test.setTimeout(120000);
   expect(
     existsSync(exe),
     "Build the native app first: npm run tauri build",
