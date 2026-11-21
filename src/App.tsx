@@ -318,6 +318,11 @@ export default function App({ initialDate }: { initialDate?: string }) {
   };
   const save = async () => {
     if (!draft || saving) return;
+    const sourceChanged =
+      !config ||
+      draft.log_root !== config.log_root ||
+      draft.rei_enabled !== config.rei_enabled ||
+      (draft.rei_enabled && draft.rei_root !== config.rei_root);
     setSettingsError("");
     setSettingsWarning([]);
     setSaving(true);
@@ -339,7 +344,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
     if (warnings.length === 0) setShowSettings(false);
     try {
       await reload(draft.timezone);
-      await synchronize();
+      if (sourceChanged) await synchronize();
     } catch (e) {
       if (warnings.length) setSettingsError(String(e));
       else setError(String(e));
