@@ -14,9 +14,9 @@ import {
   heatLevel,
   localDate,
   packSegments,
-  splitTurn,
+  indexActivity,
   statusLabel,
-  totals,
+  summarizeDays,
 } from "./calendar";
 import type { Config, Project, Snapshot, Turn } from "./types";
 const empty: Snapshot = { projects: [], turns: [], days: [], diagnostics: [] };
@@ -197,16 +197,17 @@ export default function App({ initialDate }: { initialDate?: string }) {
     () => data.turns.filter((t) => !hidden.has(t.project_id)),
     [data.turns, hidden],
   );
+  const activity = useMemo(
+    () => indexActivity(filtered, zone),
+    [filtered, zone],
+  );
   const summary = useMemo(
-    () => totals(filtered, visibleDays, zone),
-    [filtered, visibleDays, zone],
+    () => summarizeDays(activity, visibleDays),
+    [activity, visibleDays],
   );
   const segments = useMemo(
-    () =>
-      filtered
-        .flatMap((t) => splitTurn(t, zone))
-        .filter((s) => days.includes(s.date)),
-    [filtered, zone, days],
+    () => days.flatMap((d) => activity.get(d)?.segments ?? []),
+    [activity, days],
   );
   const projects = useMemo(
     () => new Map(data.projects.map((p) => [p.id, p])),
@@ -243,11 +244,11 @@ export default function App({ initialDate }: { initialDate?: string }) {
   const dateText = (ms: number) =>
     localDate(ms, zone).toFormat("yyyy/MM/dd HH:mm:ss ZZZZ");
   const dayTurns = selectedDay
-    ? filtered.filter((t) =>
-        splitTurn(t, zone).some((s) => s.date === selectedDay),
-      )
+    ? (activity.get(selectedDay)?.segments.map((s) => s.turn) ?? [])
     : [];
-  const daySummary = selectedDay ? totals(filtered, [selectedDay], zone) : null;
+  const daySummary = selectedDay
+    ? summarizeDays(activity, [selectedDay])
+    : null;
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -561,7 +562,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
                   }}
                 >
                   {days.map((d) => {
-                    const sum = totals(filtered, [d], zone);
+                    const sum = summarizeDays(activity, [d]);
                     const ms = sum[metric];
                     const level = heatLevel(
                       ms,

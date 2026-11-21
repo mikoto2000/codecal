@@ -92,36 +92,78 @@ export function packSegments(segments: Segment[]): Segment[] {
   return sorted;
 }
 export function totals(turns: Turn[], days: string[], zone: string) {
-  const dates = new Set(days);
-  const ranges: [number, number][] = [];
-  const projects: Record<string, number> = {};
-  const ids = new Set<string>();
-  let total_ms = 0;
-  for (const t of turns)
-    for (const s of splitTurn(t, zone)) {
-      if (!dates.has(s.date)) continue;
-      ids.add(t.id);
-      if (t.end === null) continue;
-      const duration = s.end - s.start;
-      total_ms += duration;
-      projects[t.project_id] = (projects[t.project_id] ?? 0) + duration;
-      ranges.push([s.start, s.end]);
-    }
-  ranges.sort((a, b) => a[0] - b[0]);
-  let elapsed_ms = 0,
-    left = 0,
-    right = 0;
-  for (const [s, e] of ranges) {
-    if (s > right) {
-      elapsed_ms += right - left;
-      left = s;
-      right = e;
-    } else right = Math.max(right, e);
-  }
-  elapsed_ms += right - left;
-  return { elapsed_ms, total_ms, count: ids.size, projects };
+  return summarizeDays(indexActivity(turns, zone), days);
 }
 export function heatLevel(ms: number, thresholds: number[]) {
   if (ms <= 0) return 0;
   return Math.min(4, 1 + thresholds.filter((h) => ms >= h * 3600000).length);
+}
+export type IndexedDay = {
+  segments: Segment[];
+  elapsed_ms: number;
+  total_ms: number;
+  projects: Record<string, number>;
+  turnIds: Set<string>;
+};
+export function indexActivity(
+  turns: Turn[],
+  zone: string,
+): Map<string, IndexedDay> {
+  const index = new Map<string, IndexedDay>();
+  for (const turn of turns)
+    for (const segment of splitTurn(turn, zone)) {
+      let day = index.get(segment.date);
+      if (!day) {
+        day = {
+          segments: [],
+          elapsed_ms: 0,
+          total_ms: 0,
+          projects: {},
+          turnIds: new Set(),
+        };
+        index.set(segment.date, day);
+      }
+      day.segments.push(segment);
+      day.turnIds.add(turn.id);
+      if (turn.end !== null) {
+        const duration = segment.end - segment.start;
+        day.total_ms += duration;
+        day.projects[turn.project_id] =
+          (day.projects[turn.project_id] ?? 0) + duration;
+      }
+    }
+  for (const day of index.values()) {
+    const ranges = day.segments
+      .filter((s) => !s.unknown)
+      .sort((a, b) => a.start - b.start);
+    let current: { start: number; end: number } | null = null;
+    for (const s of ranges) {
+      if (!current) {
+        current = { start: s.start, end: s.end };
+      } else if (s.start <= current.end) {
+        current.end = Math.max(current.end, s.end);
+      } else {
+        day.elapsed_ms += current.end - current.start;
+        current = { start: s.start, end: s.end };
+      }
+    }
+    if (current) day.elapsed_ms += current.end - current.start;
+  }
+  return index;
+}
+export function summarizeDays(index: Map<string, IndexedDay>, dates: string[]) {
+  let elapsed_ms = 0,
+    total_ms = 0;
+  const projects: Record<string, number> = {};
+  const ids = new Set<string>();
+  for (const date of new Set(dates)) {
+    const day = index.get(date);
+    if (!day) continue;
+    elapsed_ms += day.elapsed_ms;
+    total_ms += day.total_ms;
+    for (const id of day.turnIds) ids.add(id);
+    for (const [id, ms] of Object.entries(day.projects))
+      projects[id] = (projects[id] ?? 0) + ms;
+  }
+  return { elapsed_ms, total_ms, count: ids.size, projects };
 }
