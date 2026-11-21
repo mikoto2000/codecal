@@ -7,8 +7,8 @@
 ワークフローを含むコミットをGitHubリポジトリへpushした後、そのコミットにタグを付けます。以下は通常リリースの例です。
 
 ```sh
-git tag v0.1.0
-git push origin v0.1.0
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
 タグは `vMAJOR.MINOR.PATCH` 形式です。`v0.2.0-rc.1` などのSemVerプレリリースも利用でき、自動的にGitHubのPre-releaseになります。`vnext` などバージョンとして解釈できないタグでは検証ジョブが失敗し、公開しません。

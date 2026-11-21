@@ -12,7 +12,7 @@ Codex CLI / Codex デスクトップのローカルセッションログから�
 
 ## インストール・起動
 
-Windows 11 x64 と Microsoft Edge WebView2 Runtime が必要です。生成した `src-tauri/target/release/bundle/nsis/CodeCal_0.1.0_x64-setup.exe` を実行し、スタートメニューから CodeCal を起動してください。インストールせず `src-tauri/target/release/codecal.exe` を直接起動することもできます。インストーラーは未署名です。
+Windows 11 x64 と Microsoft Edge WebView2 Runtime が必要です。生成した `src-tauri/target/release/bundle/nsis/CodeCal_1.0.0_x64-setup.exe` を実行し、スタートメニューから CodeCal を起動してください。インストールせず `src-tauri/target/release/codecal.exe` を直接起動することもできます。インストーラーは未署名です。
 
 起動すると対象ディレクトリと保存先が画面下部に表示され、ログの取り込みが始まります。既定では `CODEX_HOME`、未設定ならユーザーホームの `.codex` を参照します。ホーム内の `sessions` と `archived_sessions` が対象です。「設定」のログディレクトリには Codex ホームまたは JSONL を含む専用ディレクトリを指定できます。
 
