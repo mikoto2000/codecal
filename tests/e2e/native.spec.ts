@@ -257,6 +257,71 @@ test("day view shows a spinner, preserves the selected date and navigates one da
       el.scrollTop = 480;
     });
     await page.screenshot({ path: "docs/screenshots/day.png" });
+    const scroller = page.locator(".week-scroll");
+    const box = (await scroller.boundingBox())!;
+    const pointerY = 120;
+    const beforeZoom = await page.evaluate(() => ({
+      scrollTop: document.querySelector(".week-scroll")!.scrollTop,
+      width: window.innerWidth,
+      dpr: window.devicePixelRatio,
+    }));
+    const originalBlockHeight = await page
+      .locator(".activity-block")
+      .first()
+      .evaluate((el) => el.getBoundingClientRect().height);
+    await page.mouse.move(box.x + box.width * 0.75, box.y + pointerY);
+    await page.keyboard.down("Control");
+    try {
+      await page.mouse.wheel(0, -120);
+    } finally {
+      await page.keyboard.up("Control");
+    }
+    await expect(
+      page.getByLabel("タイムラインの倍率", { exact: true }),
+    ).not.toHaveText("100%");
+    const afterZoom = await page.evaluate(() => ({
+      scrollTop: document.querySelector(".week-scroll")!.scrollTop,
+      height: document.querySelector(".week-grid")!.getBoundingClientRect()
+        .height,
+      width: window.innerWidth,
+      dpr: window.devicePixelRatio,
+    }));
+    const scale = (afterZoom.height - 1) / 1440;
+    expect(scale).toBeGreaterThan(1);
+    expect(
+      Math.abs(
+        (afterZoom.scrollTop + pointerY) / scale -
+          (beforeZoom.scrollTop + pointerY),
+      ),
+    ).toBeLessThan(1);
+    expect(afterZoom.width).toBe(beforeZoom.width);
+    expect(afterZoom.dpr).toBe(beforeZoom.dpr);
+    expect(
+      await page
+        .locator(".activity-block")
+        .first()
+        .evaluate((el) => el.getBoundingClientRect().height),
+    ).toBeGreaterThan(originalBlockHeight);
+    await page.screenshot({ path: "docs/screenshots/day-zoom.png" });
+    const zoomLabel = await page
+      .getByLabel("タイムラインの倍率", { exact: true })
+      .textContent();
+    await page.mouse.wheel(0, 120);
+    await expect
+      .poll(() => scroller.evaluate((el) => el.scrollTop))
+      .toBeGreaterThan(afterZoom.scrollTop);
+    await expect(
+      page.getByLabel("タイムラインの倍率", { exact: true }),
+    ).toHaveText(zoomLabel!);
+    await page
+      .getByRole("button", {
+        name: "タイムラインの倍率をリセット",
+        exact: true,
+      })
+      .click();
+    await expect(
+      page.getByLabel("タイムラインの倍率", { exact: true }),
+    ).toHaveText("100%");
     await page.getByRole("button", { name: "次へ", exact: true }).click();
     await expect(page.getByLabel("表示日")).toHaveValue("2026-11-21");
     await page.getByRole("button", { name: "前へ", exact: true }).click();

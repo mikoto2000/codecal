@@ -456,13 +456,13 @@ h3 {
   background: repeating-linear-gradient(
     to bottom,
     transparent 0px,
-    transparent 29px,
-    var(--grid) 29px,
-    var(--grid) 30px,
-    transparent 30px,
-    transparent 59px,
-    var(--border) 59px,
-    var(--border) 60px
+    transparent calc(30px * var(--timeline-scale, 1) - 1px),
+    var(--grid) calc(30px * var(--timeline-scale, 1) - 1px),
+    var(--grid) calc(30px * var(--timeline-scale, 1)),
+    transparent calc(30px * var(--timeline-scale, 1)),
+    transparent calc(60px * var(--timeline-scale, 1) - 1px),
+    var(--border) calc(60px * var(--timeline-scale, 1) - 1px),
+    var(--border) calc(60px * var(--timeline-scale, 1))
   );
   min-width: 0;
 }
@@ -967,4 +967,26 @@ footer,
   .spinner {
     animation: none;
   }
+}
+
+.timeline-zoom-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 7px 20px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.timeline-zoom-controls [aria-label] {
+  font-variant-numeric: tabular-nums;
+}
+.timeline-zoom-controls button {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+.week-scroll {
+  overflow-anchor: none;
 }

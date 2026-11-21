@@ -6,9 +6,11 @@ import {
   useState,
   useTransition,
   type ReactNode,
+  type CSSProperties,
 } from "react";
 import { DateTime } from "luxon";
 import { api } from "./api";
+import { useTimelineZoom } from "./useTimelineZoom";
 import {
   daysInView,
   type CalendarView,
@@ -102,6 +104,12 @@ export default function App({ initialDate }: { initialDate?: string }) {
   const [view, setView] = useState<CalendarView>("week"),
     [anchor, setAnchor] = useState(initialDate ?? DateTime.now().toISODate()!),
     [hidden, setHidden] = useState<Set<string>>(new Set());
+  const {
+    viewportRef: timelineViewportRef,
+    scale: dayScale,
+    reset: resetTimelineZoom,
+  } = useTimelineZoom(view === "day");
+  const timelineScale = view === "day" ? dayScale : 1;
   const [loading, setLoading] = useState(true),
     [syncing, setSyncing] = useState(false),
     [error, setError] = useState(""),
@@ -484,6 +492,21 @@ export default function App({ initialDate }: { initialDate?: string }) {
           )}
           {view !== "month" ? (
             <>
+              {view === "day" && (
+                <div className="timeline-zoom-controls">
+                  <span>Ctrl＋ホイールで拡大・縮小</span>
+                  <span aria-label="タイムラインの倍率">
+                    {Math.round(dayScale * 100)}%
+                  </span>
+                  <button
+                    aria-label="タイムラインの倍率をリセット"
+                    onClick={resetTimelineZoom}
+                    disabled={dayScale === 1}
+                  >
+                    リセット
+                  </button>
+                </div>
+              )}
               <div
                 className="week-head"
                 style={{
@@ -507,16 +530,20 @@ export default function App({ initialDate }: { initialDate?: string }) {
                   </div>
                 ))}
               </div>
-              <div className="week-scroll">
+              <div className="week-scroll" ref={timelineViewportRef}>
                 <div
                   className="week-grid"
-                  style={{
-                    gridTemplateColumns: `60px repeat(${days.length}, minmax(0,1fr))`,
-                  }}
+                  style={
+                    {
+                      gridTemplateColumns: `60px repeat(${days.length}, minmax(0,1fr))`,
+                      height: 1440 * timelineScale + 1,
+                      "--timeline-scale": timelineScale,
+                    } as CSSProperties
+                  }
                 >
                   <div className="time-axis">
                     {Array.from({ length: 25 }, (_, h) => (
-                      <span key={h} style={{ top: h * 60 }}>
+                      <span key={h} style={{ top: h * 60 * timelineScale }}>
                         {String(h).padStart(2, "0")}:00
                       </span>
                     ))}
@@ -539,7 +566,12 @@ export default function App({ initialDate }: { initialDate?: string }) {
                               <span
                                 className="dst-tick"
                                 key={h}
-                                style={{ top: ((h * 3600000) / length) * 1440 }}
+                                style={{
+                                  top:
+                                    ((h * 3600000) / length) *
+                                    1440 *
+                                    timelineScale,
+                                }}
                               >
                                 {midnight
                                   .plus({ hours: h })
@@ -552,43 +584,53 @@ export default function App({ initialDate }: { initialDate?: string }) {
                             className="now-line"
                             style={{
                               top:
-                                ((now - midnight.toMillis()) / length) * 1440,
+                                ((now - midnight.toMillis()) / length) *
+                                1440 *
+                                timelineScale,
                             }}
                           >
                             <span />
                           </div>
                         )}
-                        {packSegments(segments.filter((s) => s.date === d)).map(
-                          (s) => {
-                            const p = projects.get(s.turn.project_id);
-                            const times = `${localDate(s.start, zone).toFormat("HH:mm")} – ${s.unknown ? "?" : localDate(s.end, zone).toFormat(s.end === next.toMillis() ? "'24:00'" : "HH:mm")}`;
-                            return (
-                              <button
-                                key={`${s.turn.id}:${d}`}
-                                className={`activity-block ${s.unknown ? "unknown" : ""}`}
-                                aria-label={`${p?.name} ${times} ${statusLabel[s.turn.status]}`}
-                                title={`${p?.name}\n${times}\n${statusLabel[s.turn.status]}\n${s.turn.prompt}`}
-                                style={{
-                                  top: s.top,
-                                  height: s.height,
-                                  left: `calc(${(s.lane / s.lanes) * 100}% + 3px)`,
-                                  width: `calc(${100 / s.lanes}% - 6px)`,
-                                  borderColor: p?.color,
-                                  background: `${p?.color ?? "#14b8a6"}26`,
-                                }}
-                                onClick={() => openTurn(s.turn)}
-                              >
-                                <strong>{p?.name ?? "Unknown"}</strong>
-                                <span>
-                                  {times} · {statusLabel[s.turn.status]}
-                                </span>
-                                {s.height > 60 && (
-                                  <p>{s.turn.prompt || "依頼内容なし"}</p>
-                                )}
-                              </button>
-                            );
-                          },
-                        )}
+                        {packSegments(
+                          segments
+                            .filter((s) => s.date === d)
+                            .map((s) => ({
+                              ...s,
+                              top: s.top * timelineScale,
+                              height: s.unknown
+                                ? 22
+                                : Math.max(2, s.height * timelineScale),
+                            })),
+                        ).map((s) => {
+                          const p = projects.get(s.turn.project_id);
+                          const times = `${localDate(s.start, zone).toFormat("HH:mm")} – ${s.unknown ? "?" : localDate(s.end, zone).toFormat(s.end === next.toMillis() ? "'24:00'" : "HH:mm")}`;
+                          return (
+                            <button
+                              key={`${s.turn.id}:${d}`}
+                              className={`activity-block ${s.unknown ? "unknown" : ""}`}
+                              aria-label={`${p?.name} ${times} ${statusLabel[s.turn.status]}`}
+                              title={`${p?.name}\n${times}\n${statusLabel[s.turn.status]}\n${s.turn.prompt}`}
+                              style={{
+                                top: s.top,
+                                height: s.height,
+                                left: `calc(${(s.lane / s.lanes) * 100}% + 3px)`,
+                                width: `calc(${100 / s.lanes}% - 6px)`,
+                                borderColor: p?.color,
+                                background: `${p?.color ?? "#14b8a6"}26`,
+                              }}
+                              onClick={() => openTurn(s.turn)}
+                            >
+                              <strong>{p?.name ?? "Unknown"}</strong>
+                              <span>
+                                {times} · {statusLabel[s.turn.status]}
+                              </span>
+                              {s.height > 60 && (
+                                <p>{s.turn.prompt || "依頼内容なし"}</p>
+                              )}
+                            </button>
+                          );
+                        })}
                       </div>
                     );
                   })}
