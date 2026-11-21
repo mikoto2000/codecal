@@ -70,6 +70,13 @@ async function launch() {
     .toBeGreaterThan(0);
   page = browser.contexts().flatMap((c) => c.pages())[0];
   await page.waitForLoadState("domcontentloaded");
+  // Fixture times and labels use Japan time; CI runners usually use UTC.
+  await page.getByRole("button", { name: "設定", exact: true }).click();
+  await page.getByLabel("タイムゾーン", { exact: true }).fill("Asia/Tokyo");
+  await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+  await expect(
+    page.getByRole("dialog", { name: "設定", exact: true }),
+  ).not.toBeVisible();
 }
 async function stop() {
   await browser?.close();
