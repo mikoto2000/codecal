@@ -581,6 +581,10 @@ footer button {
   overflow-wrap: anywhere;
   font-size: 12px;
 }
+.diagnostic-copy {
+  width: 100%;
+  min-height: 180px;
+}
 .setup-notice p {
   margin: 6px 0;
 }

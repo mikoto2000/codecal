@@ -54,6 +54,7 @@ pub struct Snapshot {
     pub turns: Vec<Turn>,
     pub days: Vec<Day>,
     pub diagnostics: Vec<String>,
+    pub diagnostics_total: i64,
 }
 #[derive(Serialize)]
 pub struct Progress {
@@ -588,6 +589,10 @@ impl Store {
             })
             .collect::<Vec<_>>();
         let days = aggregate(&intervals, timezone)?;
+        let diagnostics_total = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM diagnostics", [], |r| r.get(0))
+            .map_err(err)?;
         let mut q = self
             .conn
             .prepare("SELECT path,message FROM diagnostics ORDER BY path LIMIT 200")
@@ -608,6 +613,7 @@ impl Store {
             turns,
             days,
             diagnostics,
+            diagnostics_total,
         })
     }
     pub fn source_excerpt(&self, turn_id: &str) -> Result<String, String> {

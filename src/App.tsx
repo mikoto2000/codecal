@@ -28,7 +28,13 @@ import {
   summarizeDays,
 } from "./calendar";
 import type { Config, Project, Snapshot, Turn } from "./types";
-const empty: Snapshot = { projects: [], turns: [], days: [], diagnostics: [] };
+const empty: Snapshot = {
+  projects: [],
+  turns: [],
+  days: [],
+  diagnostics: [],
+  diagnostics_total: 0,
+};
 function Modal({
   title,
   close,
@@ -124,6 +130,8 @@ export default function App({ initialDate }: { initialDate?: string }) {
     [progress, setProgress] = useState(""),
     [notice, setNotice] = useState("");
   const [firstRun, setFirstRun] = useState(false);
+  const [copyStatus, setCopyStatus] = useState("");
+  const [copyFailed, setCopyFailed] = useState(false);
   const [bootNotices, setBootNotices] = useState<string[]>([]);
   const timezoneChoices = useMemo(() => {
     try {
@@ -316,6 +324,11 @@ export default function App({ initialDate }: { initialDate?: string }) {
     setSettingsWarning([]);
     setShowSettings(true);
   };
+  const openDiagnostics = () => {
+    setCopyStatus("");
+    setCopyFailed(false);
+    setShowDiagnostics(true);
+  };
   const save = async () => {
     if (!draft || saving) return;
     const sourceChanged =
@@ -352,6 +365,12 @@ export default function App({ initialDate }: { initialDate?: string }) {
   };
   const dateText = (ms: number) =>
     localDate(ms, zone).toFormat("yyyy/MM/dd HH:mm:ss ZZZZ");
+  const diagnosticSummary = `表示 ${data.diagnostics.length} 件 / 全 ${data.diagnostics_total} 件`;
+  const omittedDiagnostics = Math.max(
+    0,
+    data.diagnostics_total - data.diagnostics.length,
+  );
+  const diagnosticText = `${diagnosticSummary}${omittedDiagnostics ? `（他 ${omittedDiagnostics} 件は省略）` : ""}\n\n${data.diagnostics.join("\n\n")}`;
   const dayTurns = selectedDay
     ? (activity.get(selectedDay)?.segments.map((s) => s.turn) ?? [])
     : [];
@@ -495,7 +514,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
             <button onClick={openSettings} disabled={!config}>
               設定を開く
             </button>
-            <button onClick={() => setShowDiagnostics(true)}>診断を見る</button>
+            <button onClick={openDiagnostics}>診断を見る</button>
             <button aria-label="エラーを閉じる" onClick={() => setError("")}>
               ×
             </button>
@@ -596,9 +615,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
                   <button onClick={openSettings} disabled={!config}>
                     設定を開く
                   </button>
-                  <button onClick={() => setShowDiagnostics(true)}>
-                    診断を見る
-                  </button>
+                  <button onClick={openDiagnostics}>診断を見る</button>
                 </>
               ) : filtered.length === 0 ? (
                 <>
@@ -884,9 +901,9 @@ export default function App({ initialDate }: { initialDate?: string }) {
           >
             {zone} · {notice || "ローカルの実行履歴を読み取り専用で解析します"}
           </span>
-          <button onClick={() => setShowDiagnostics(true)}>
+          <button onClick={openDiagnostics}>
             診断{" "}
-            {data.diagnostics.length > 0 ? `(${data.diagnostics.length})` : ""}
+            {data.diagnostics_total > 0 ? `(${data.diagnostics_total})` : ""}
           </button>
         </footer>
         <div className="sync-progress" aria-live="polite">
@@ -1234,6 +1251,40 @@ export default function App({ initialDate }: { initialDate?: string }) {
           <p>
             元のログは変更していません。解析不要のイベントは読み飛ばします。
           </p>
+          <p>
+            {diagnosticSummary}
+            {omittedDiagnostics > 0 && `（他 ${omittedDiagnostics} 件は省略）`}
+          </p>
+          <p className="hint">
+            診断にはローカルのパスが含まれます。共有前に内容を確認してください。
+          </p>
+          <button
+            disabled={data.diagnostics.length === 0}
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(diagnosticText);
+                setCopyFailed(false);
+                setCopyStatus("表示中の診断をコピーしました。");
+              } catch {
+                setCopyFailed(true);
+                setCopyStatus(
+                  "コピーできませんでした。下のテキストを選択してコピーしてください。",
+                );
+              }
+            }}
+          >
+            診断をコピー
+          </button>
+          {copyStatus && <p role="status">{copyStatus}</p>}
+          {copyFailed && (
+            <textarea
+              className="diagnostic-copy"
+              aria-label="コピー用の診断"
+              readOnly
+              value={diagnosticText}
+              onFocus={(e) => e.currentTarget.select()}
+            />
+          )}
           {data.diagnostics.length ? (
             data.diagnostics.map((s, i) => (
               <pre className="diagnostic" key={i}>
