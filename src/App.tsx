@@ -349,9 +349,9 @@ export default function App({ initialDate }: { initialDate?: string }) {
           <span className="brand-icon">▦</span>CodeCal
           <span className="version">LOCAL</span>
         </a>
-        <p className="eyebrow">YOUR CODING RHYTHM</p>
+        <p className="eyebrow">YOUR WORK RHYTHM</p>
         <p className="sidebar-intro">
-          開発の時間を、
+          作業の時間を、
           <br />
           見えるかたちに。
         </p>
@@ -403,7 +403,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
         <header className="topbar">
           <div>
             <span className="eyebrow">ACTIVITY CALENDAR</span>
-            <h1>開発アクティビティ</h1>
+            <h1>作業アクティビティ</h1>
           </div>
           <div className="top-actions">
             <span
