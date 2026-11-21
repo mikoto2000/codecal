@@ -57,7 +57,7 @@ E2EはWindowsの実行ファイルとWebView2に直接接続します。ビル�
 node scripts/create-sample.mjs
 ```
 
-設定で `.local/sample-codex` の絶対パスを指定すると合成ログを試せます。既存ファイルは上書きしません。
+設定で `.local/sample-codex` の絶対パスを指定すると合成ログを試せます。再実行時は既存ファイルを上書きせずにスキップし、作成件数とスキップ件数を表示します。不足しているサンプルだけを追加できます。
 
 `CODEX_HOME` を合成ログディレクトリ、`CODECAL_DATA_DIR` を空の専用保存ディレクトリに指定すると、通常の履歴から独立してテストできます。`CODECAL_DATA_DIR` はDBとウィンドウ状態の保存先を変更します。実ログのプロンプト・ツール出力・DBはGitへ追加しません。`.local/` と `*.db` はignore対象です。
 
