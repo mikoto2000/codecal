@@ -42,7 +42,8 @@ jobs:
       - name: Validate tag and prepare six build targets
         id: plan
         run: node scripts/release.mjs plan
-      - run: npm ci
+      - name: Install locked dependencies from public npm (including older tags)
+        run: npm ci --registry=https://registry.npmjs.org/ --replace-registry-host=http://gx10-6acc.local:18081/repository/npmjs
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run format:check
@@ -76,7 +77,8 @@ jobs:
           sudo apt-get install -y build-essential file libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libxdo-dev libssl-dev librsvg2-dev patchelf libfuse2
       - name: Apply tag version to npm, Cargo and Tauri
         run: node scripts/release.mjs version
-      - run: npm ci
+      - name: Install locked dependencies from public npm (including older tags)
+        run: npm ci --registry=https://registry.npmjs.org/ --replace-registry-host=http://gx10-6acc.local:18081/repository/npmjs
       - name: Test native Rust core
         run: cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --locked --target ${{ matrix.target }}
       - name: Build native installer bundles
