@@ -6,5 +6,5 @@ export default defineConfig({
   timeout: 60000,
   expect: { timeout: 10000 },
   reporter: [["list"], ["html", { open: "never" }]],
-  use: { trace: "retain-on-failure" },
+  use: { trace: "retain-on-failure", actionTimeout: 15000 },
 });
