@@ -37,7 +37,14 @@ async function launch() {
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=9223",
     },
   });
-  process.on("error", () => {});
+  let launchError = "";
+  let stderr = "";
+  process.on("error", (error) => {
+    launchError = error.message;
+  });
+  process.stderr?.on("data", (chunk) => {
+    stderr = (stderr + String(chunk)).slice(-8192);
+  });
   await expect
     .poll(
       async () => {
@@ -50,7 +57,13 @@ async function launch() {
       },
       { timeout: 20000 },
     )
-    .toBe(true);
+    .toBe(true)
+    .catch((cause) => {
+      throw new Error(
+        `WebView2 debugging did not start: ${exe}; exit=${process.exitCode}; spawn=${launchError}; stderr=${stderr}`,
+        { cause },
+      );
+    });
   browser = await chromium.connectOverCDP("http://127.0.0.1:9223");
   await expect
     .poll(() => browser.contexts().flatMap((c) => c.pages()).length)
