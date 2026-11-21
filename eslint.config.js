@@ -2,7 +2,16 @@ import js from "@eslint/js";
 import ts from "typescript-eslint";
 import hooks from "eslint-plugin-react-hooks";
 export default ts.config(
-  { ignores: ["dist/**", "node_modules/**", "src-tauri/target/**", "playwright-report/**", "test-results/**", ".local/**"] },
+  {
+    ignores: [
+      "dist/**",
+      "node_modules/**",
+      "src-tauri/target/**",
+      "playwright-report/**",
+      "test-results/**",
+      ".local/**",
+    ],
+  },
   js.configs.recommended,
   ...ts.configs.recommended,
   {

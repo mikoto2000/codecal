@@ -77,6 +77,12 @@ struct Cursor {
 impl Store {
     pub fn open(path: &Path) -> Result<Self, String> {
         let conn = Connection::open(path).map_err(err)?;
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .map_err(err)?;
+        if version > 1 {
+            return Err("このデータベースは新しい CodeCal で作成されています".into());
+        }
         conn.busy_timeout(std::time::Duration::from_secs(10))
             .map_err(err)?;
         conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;
@@ -213,9 +219,12 @@ impl Store {
                 continue;
             }
             let Ok(meta) = path.metadata() else { continue };
-            let identity = format!("{:?}", meta.created().ok());
+            let identity = file_identity(&meta);
             let candidate = cursors.iter().find_map(|(old, c)| {
-                if Path::new(old).exists() || c.identity != identity || meta.len() < c.offset {
+                if Path::new(old).exists()
+                    || c.identity.split('|').next() != identity.split('|').next()
+                    || meta.len() < c.offset
+                {
                     return None;
                 }
                 let mut bytes = vec![0; c.head_len as usize];
@@ -402,6 +411,9 @@ impl Store {
                         "completed" | "failed" | "interrupted" if e.timestamp >= t.start => {
                             t.end = Some(e.timestamp);
                             t.status = e.kind;
+                            if active.get(&sid) == Some(&t.turn_id) {
+                                active.remove(&sid);
+                            }
                         }
                         _ => {}
                     }
@@ -525,17 +537,29 @@ pub fn normalize_path(path: &str) -> String {
         p.to_string()
     }
 }
+fn file_identity(meta: &std::fs::Metadata) -> String {
+    format!(
+        "{:?}|{:?}|{}",
+        meta.created().ok(),
+        meta.modified().ok(),
+        meta.len()
+    )
+}
 fn read_delta(path: &Path, previous: Option<&Cursor>) -> Result<Delta, String> {
     let file = File::open(path).map_err(err)?;
     let meta = file.metadata().map_err(err)?;
     let len = meta.len();
-    let identity = format!("{:?}", meta.created().ok());
+    let identity = file_identity(&meta);
     let mut reader = BufReader::new(file);
     let old_head_len = previous.map_or(0, |c| c.head_len);
     let mut old_head = vec![0; old_head_len.min(len) as usize];
     reader.read_exact(&mut old_head).map_err(err)?;
-    let reset = previous
-        .is_none_or(|c| len < c.offset || identity != c.identity || hash(&old_head) != c.head);
+    let reset = previous.is_none_or(|c| {
+        len < c.offset
+            || identity.split('|').next() != c.identity.split('|').next()
+            || (len == c.offset && identity != c.identity)
+            || hash(&old_head) != c.head
+    });
     reader.seek(SeekFrom::Start(0)).map_err(err)?;
     let head_len = len.min(4096);
     let mut head = vec![0; head_len as usize];

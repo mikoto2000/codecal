@@ -883,10 +883,54 @@ legend {
 }
 
 /* Keep the navigation, statistics and data paths visible in desktop windows. */
-.workspace{height:100vh;display:flex;flex-direction:column}
-.topbar,.summary-cards,.calendar-toolbar,.week-head,footer,.sync-progress{flex-shrink:0}
-.calendar-card{flex:1;min-height:0;display:flex;flex-direction:column}
-.week-scroll{height:auto;min-height:100px;flex:1;max-height:none}
-.month-view{overflow:auto;min-height:0}
-.heatmap,.weekday-labels{grid-template-rows:repeat(7,clamp(38px,calc((100vh - 620px)/7),70px))}
-@media(max-height:950px){.heatmap button{gap:2px;padding:5px 10px}.heatmap button small{display:none}.month-intro{padding:12px 0}.month-view{padding-bottom:16px}.heat-legend{margin-top:15px}}
+.workspace {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+.topbar,
+.summary-cards,
+.calendar-toolbar,
+.week-head,
+footer,
+.sync-progress {
+  flex-shrink: 0;
+}
+.calendar-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.week-scroll {
+  height: auto;
+  min-height: 100px;
+  flex: 1;
+  max-height: none;
+}
+.month-view {
+  overflow: auto;
+  min-height: 0;
+}
+.heatmap,
+.weekday-labels {
+  grid-template-rows: repeat(7, clamp(38px, calc((100vh - 620px) / 7), 70px));
+}
+@media (max-height: 950px) {
+  .heatmap button {
+    gap: 2px;
+    padding: 5px 10px;
+  }
+  .heatmap button small {
+    display: none;
+  }
+  .month-intro {
+    padding: 12px 0;
+  }
+  .month-view {
+    padding-bottom: 16px;
+  }
+  .heat-legend {
+    margin-top: 15px;
+  }
+}

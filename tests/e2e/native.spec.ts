@@ -146,6 +146,43 @@ test("native Tauri: import, calendars, detail, watch append and restart SQLite",
     await launch();
     await page.getByLabel("表示日").fill("2026-11-20");
     await expect(page.getByTestId("total-elapsed")).toHaveText("3h 0m");
+    // A new parallel session must appear without a manual refresh.
+    writeFileSync(
+      path.join(logs, "sessions", "parallel.jsonl"),
+      event(
+        "session_meta",
+        { id: "parallel", cwd: "C:/sample/Editor" },
+        "2026-11-20T02:00:00Z",
+      ) +
+        event(
+          "event_msg",
+          { type: "task_started", turn_id: "parallel-turn" },
+          "2026-11-20T02:00:00Z",
+        ) +
+        event(
+          "event_msg",
+          { type: "user_message", message: "検索パネルのテストを追加する" },
+          "2026-11-20T02:00:00Z",
+        ) +
+        event(
+          "event_msg",
+          { type: "task_complete", turn_id: "parallel-turn" },
+          "2026-11-20T04:00:00Z",
+        ),
+    );
+    await expect(page.getByLabel("editor を表示")).toBeVisible();
+    await expect(page.getByTestId("total-elapsed")).toHaveText("4h 0m");
+    await expect(page.locator(".summary-cards")).toContainText("5h 0m");
+    await page.locator(".week-scroll").evaluate((el) => {
+      el.scrollTop = 480;
+    });
+    await page.screenshot({ path: "docs/screenshots/week.png" });
+    await page.getByRole("button", { name: "月", exact: true }).click();
+    await page.screenshot({ path: "docs/screenshots/month.png" });
+    await page.getByRole("button", { name: "設定", exact: true }).click();
+    await page.getByLabel("テーマ", { exact: true }).selectOption("dark");
+    await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   } finally {
     await stop();
   }

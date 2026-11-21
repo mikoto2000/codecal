@@ -3,7 +3,7 @@
 2026-11-21、ローカル sessions (184ファイル) / archived_sessions (4ファイル) を確認。各ディレクトリ先頭12ファイル、計7,537行の構造のみ集計した。値・プロンプト・ツール出力は転記していない。形式は公開固定仕様とみなさない。
 
 - 外側: timestamp (RFC3339), type, payload。
-- session_meta: id と session_id、timestamp、cwd、cli_version。再開時には同一IDのメタデータが複数回現れる。
+- session_meta: id と session_id、timestamp、cwd、cli_version。再開・コピーを考慮し、同一IDのメタデータの複数回出現を許容する（再開操作そのものは未観測）。
 - turn_context: turn_id、cwd。セッション内でも cwd が変わり得るためプロジェクトをターンに紐づける。
 - event_msg.task_started: turn_id、started_at (Unixミリ秒)。
 - event_msg.task_complete: turn_id、started_at、completed_at、duration_ms。完了状態と外側時刻を記録する。

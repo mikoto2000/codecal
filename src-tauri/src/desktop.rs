@@ -12,8 +12,18 @@ pub struct Config {
     pub timezone: String,
     pub week_start: u8,
     pub theme: String,
+    #[serde(deserialize_with = "read_thresholds")]
     pub thresholds: [f64; 3],
     pub auto_refresh: bool,
+}
+fn read_thresholds<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<[f64; 3], D::Error> {
+    let values = Vec::<f64>::deserialize(deserializer)?;
+    if values.len() != 3 && values.len() != 4 {
+        return Err(serde::de::Error::custom("three thresholds required"));
+    }
+    Ok([values[0], values[1], values[2]])
 }
 impl Default for Config {
     fn default() -> Self {
