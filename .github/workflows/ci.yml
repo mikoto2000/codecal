@@ -50,7 +50,9 @@ jobs:
       - run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets --locked
       - run: npm run build
   windows:
-    runs-on: windows-latest
+    # Server 2025 can leave WebView2 automation waiting for its DevTools port.
+    # https://github.com/actions/runner-images/issues/14738
+    runs-on: windows-2022
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
