@@ -58,7 +58,7 @@ RoamingからLocalへの実DB移行も成功。旧DBの移行前後のSHA256が�
 - 実行ファイル: src-tauri/target/release/codecal.exe
 - インストーラー: src-tauri/target/release/bundle/nsis/CodeCal_0.1.0_x64-setup.exe
 - 種別: Windows x64、NSIS、未署名、約2.84MiB
-- インストーラー SHA256: `AC8B921683D51D63308FC117E33CED8B3E9F5B39ECF2163CAF4B935A465B47AC`
+- インストーラー SHA256: `2BA66F60DC57F483C007D56440E09D7F019E8F1D46105D785CA85498E78B1968`
 - DB既定: `%LOCALAPPDATA%/dev.codecal.desktop/codecal.db`
 - 保存先上書き: `CODECAL_DATA_DIR`
 
@@ -91,3 +91,9 @@ Conventional Commitsで、parser、重複時間集計、永続化・同期、カ
 本追加実装の検証はフロントエンド22件、ネイティブE2E3シナリオ。型チェック、ESLint、Prettier、Vite/Tauri/NSISビルドも成功しています。Rust本体の変更はありません。新しいスクリーンショットに差し替え、日表示の画像も追加しました。上記インストーラーSHA256は追加実装を含む更新版です。
 
 PR作成の依頼はユーザーの指示により取り消され、ローカルのConventional Commitsとして記録しています。
+
+## 追加実装：日次タイムラインのCtrl＋ホイールズーム
+
+日表示でCtrl＋ホイール上回転による拡大、下回転による縮小を追加しました（50〜400%）。マウス位置の時刻を保持し、倍率表示と100%へのリセットを提供します。時刻線・作業ブロック・現在時刻線を同じ倍率で変換します。通常のスクロールと週表示には適用しません。起動中は日表示の倍率を保持します。
+
+本変更のフロントエンド28件、ネイティブE2E3件が成功（12.6秒）。実WebViewでブラウザー全体の倍率を変えずに拡大できることも確認しました。型・lint・format・Windowsビルドを確認し、配布パッケージを更新しています。

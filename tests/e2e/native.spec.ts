@@ -226,7 +226,7 @@ test("month places seven columns left to right with the following week below", a
   }
 });
 
-test("day view shows a spinner, preserves the selected date and navigates one day", async () => {
+test("day view shows a spinner, zooms around the pointer and navigates one day", async () => {
   mkdirSync(path.join(logs, "sessions"), { recursive: true });
   mkdirSync(appdata, { recursive: true });
   try {
