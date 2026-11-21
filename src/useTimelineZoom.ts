@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { wheelZoomScale, zoomAtPointer } from "./timeline-zoom";
 export function useTimelineZoom(enabled: boolean) {
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -26,7 +20,7 @@ export function useTimelineZoom(enabled: boolean) {
     pendingScroll.current = next.scrollTop;
     setScale(next.scale);
   }, []);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = viewportRef.current;
     if (!enabled || !element) return;
     const wheel = (event: WheelEvent) => {
