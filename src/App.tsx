@@ -117,6 +117,8 @@ export default function App({ initialDate }: { initialDate?: string }) {
   const timelineScale = view === "day" ? dayScale : 1;
   const [loading, setLoading] = useState(true),
     [syncing, setSyncing] = useState(false),
+    [saving, setSaving] = useState(false),
+    [settingsError, setSettingsError] = useState(""),
     [error, setError] = useState(""),
     [progress, setProgress] = useState(""),
     [notice, setNotice] = useState("");
@@ -298,18 +300,28 @@ export default function App({ initialDate }: { initialDate?: string }) {
   };
   const openSettings = () => {
     setDraft(config);
+    setSettingsError("");
     setShowSettings(true);
   };
   const save = async () => {
-    if (!draft) return;
+    if (!draft || saving) return;
+    setSettingsError("");
+    setSaving(true);
     try {
       await api.save(draft);
-      setConfig(draft);
-      setNotice(
-        `解析対象: Codex ${draft.log_root}${draft.rei_enabled ? ` / れい ${draft.rei_root}` : ""}  ·  保存先: ${dbPath}`,
-      );
-      zoneRef.current = draft.timezone;
-      setShowSettings(false);
+    } catch (e) {
+      setSettingsError(String(e));
+      return;
+    } finally {
+      setSaving(false);
+    }
+    setConfig(draft);
+    setNotice(
+      `解析対象: Codex ${draft.log_root}${draft.rei_enabled ? ` / れい ${draft.rei_root}` : ""}  ·  保存先: ${dbPath}`,
+    );
+    zoneRef.current = draft.timezone;
+    setShowSettings(false);
+    try {
       await reload(draft.timezone);
       await synchronize();
     } catch (e) {
@@ -990,6 +1002,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
       )}
       {showSettings && draft && (
         <Modal title="設定" close={() => setShowSettings(false)}>
+          {settingsError && <p role="alert">{settingsError}</p>}
           <form
             className="settings-form"
             onSubmit={(e) => {
@@ -1104,7 +1117,9 @@ export default function App({ initialDate }: { initialDate?: string }) {
               />
               自動更新を有効にする
             </label>
-            <button className="primary">設定を保存</button>
+            <button className="primary" disabled={saving}>
+              {saving ? "保存中…" : "設定を保存"}
+            </button>
           </form>
           <h3>プロジェクトの表示</h3>
           {data.projects.map((p) => (
@@ -1112,7 +1127,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
               key={p.id}
               project={p}
               changed={() => void reload(zone)}
-              error={setError}
+              error={setSettingsError}
             />
           ))}
         </Modal>
