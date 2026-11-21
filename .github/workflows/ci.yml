@@ -72,6 +72,23 @@ jobs:
       - run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets --locked
       - run: npm run build
       - run: npm run tauri build
+      - name: Ensure WebView2 Runtime for native E2E
+        shell: pwsh
+        run: |
+          $runtimeKeys = @(
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+            'HKCU:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          )
+          $runtimeVersion = Get-ItemProperty -Path $runtimeKeys -Name pv -ErrorAction SilentlyContinue | Where-Object { $_.pv -and $_.pv -ne '0.0.0.0' } | Select-Object -First 1 -ExpandProperty pv
+          if (!$runtimeVersion) {
+            $installer = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebview2Setup.exe'
+            Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $installer
+            $installation = Start-Process -FilePath $installer -ArgumentList '/silent', '/install' -Wait -PassThru -WindowStyle Hidden
+            if ($installation.ExitCode -ne 0) { throw "WebView2 installation failed: $($installation.ExitCode)" }
+            $runtimeVersion = Get-ItemProperty -Path $runtimeKeys -Name pv -ErrorAction SilentlyContinue | Where-Object { $_.pv -and $_.pv -ne '0.0.0.0' } | Select-Object -First 1 -ExpandProperty pv
+          }
+          if (!$runtimeVersion) { throw 'WebView2 Runtime is not installed' }
+          Write-Output "WebView2 Runtime: $runtimeVersion"
       - run: npm run test:e2e
       - uses: actions/upload-artifact@v7
         with:
