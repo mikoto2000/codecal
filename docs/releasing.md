@@ -11,6 +11,14 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
+新規リポジトリでは先に既定ブランチをpushし、ワークフローが登録されてからタグを別途pushしてください。既存タグに対する実行記録がない場合は、タグを削除・変更せず、既定ブランチのワークフローを手動起動できます。
+
+```sh
+gh workflow run release.yml --ref main -f tag=v1.0.0
+```
+
+手動起動も指定タグのソースをビルドし、タグpushと同じ並行実行グループを使います。
+
 タグは `vMAJOR.MINOR.PATCH` 形式です。`v0.2.0-rc.1` などのSemVerプレリリースも利用でき、自動的にGitHubのPre-releaseになります。`vnext` などバージョンとして解釈できないタグでは検証ジョブが失敗し、公開しません。
 
 ビルド時にタグから `v` を除いた値を `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` に反映します。変更は各ランナー内だけで行い、リポジトリへ書き戻しません。
