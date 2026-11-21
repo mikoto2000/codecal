@@ -4,7 +4,17 @@ CodeCalはReact / TypeScript / Vite / Tailwind CSSと、Tauri 2 / Rust / SQLite�
 
 ## 開発環境と起動
 
-Node.js 24とRust stable、お使いのOS向けのTauriビルド環境を用意します。
+Node.js 24.22.1、npm 11.19.1、Rust 1.99.1と、お使いのOS向けのTauriビルド環境を用意します。
+Node.jsは `.nvmrc`、npmは `package.json` の `packageManager`、Rustは `rust-toolchain.toml` に検証済みバージョンを記録しています。rustupは作業ディレクトリの設定ファイルからRustとrustfmt/clippyを選択します。
+
+```sh
+nvm install
+nvm use
+npm install --global npm@11.19.1
+rustup show
+```
+
+`nvm` は利用している場合だけ実行してください。Windows版nvmでは `.nvmrc` の値を引数に渡すか、Node.js 24.22.1を直接導入できます。ツールチェーンを更新するときは、上記ファイル、`package.json` の `engines`、CI・リリース両ワークフローの固定値とこのガイドを同じPRで更新し、全OSのCIを確認してください。リリースワークフローは固定値を使うため、これらのファイルを持たない既存タグの手動ビルドでも同じツールを導入します。
 
 - Windows：Rust MSVC、Visual Studio C++ Build Tools、Windows SDK、WebView2。
 - macOS：Xcode Command Line ToolsなどのTauri開発要件。
