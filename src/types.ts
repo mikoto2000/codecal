@@ -35,4 +35,9 @@ export type Config = {
   thresholds: [number, number, number];
   auto_refresh: boolean;
 };
-export type Bootstrap = { config: Config; db_path: string; first_run: boolean };
+export type Bootstrap = {
+  config: Config;
+  db_path: string;
+  first_run: boolean;
+  notices: string[];
+};
