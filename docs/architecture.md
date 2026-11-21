@@ -35,3 +35,13 @@ FullCalendar Standardの非Premiumプラグインは [公式ライセンス](htt
 ## カレンダーの表示モデル
 
 日・週・月は同一の日別インデックスを参照します。履歴、プロジェクト絞り込み、タイムゾーンの変更時にだけ区間分割と日次和集合を再計算し、月の各セルで全履歴を再走査しません。月は7列（曜日）と4〜6行（週）の配置です。ビューと表示日の変更は、スピナーを描画するフレームを確保した後、Reactのtransitionで反映します。
+
+## ウィンドウ状態の保存と復元
+
+Tauri公式のtauri-plugin-window-state 2.5をRust側へ登録し、位置・サイズ・最大化状態を通常終了時に保存、起動時に復元します。状態ファイルはDBと同じLocal保存先のwindow-state.jsonです。CODECAL_DATA_DIRによる隔離にも従います。ゲストJS APIは使わず、フロントエンドの権限は増やしていません。
+
+DBの実パスから状態ファイルの絶対パスを作り、公式プラグインのwith_filenameへ渡します。Tauriは通常の設定ウィンドウをapp.setupより前に生成するため、メインウィンドウのcreateをfalseにし、プラグイン登録後にWebviewWindowBuilder::from_configで生成しています。visibleもfalseにし、プラグインが位置・サイズを復元した後に表示します。これにより初期化順序の不備と起動時の位置のちらつきを避けます。
+
+プラグインの保存対象はSIZE / POSITION / MAXIMIZED / VISIBLE。状態ファイルがない・壊れている場合は初期状態で開き、保存位置に対応するモニターがない場合はOSの配置を使います。自前のウィンドウ状態パーサーや移動イベント処理は追加していません。
+
+公式仕様: https://v2.tauri.app/plugin/window-state/
