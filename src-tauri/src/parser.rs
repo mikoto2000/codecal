@@ -35,7 +35,7 @@ pub fn parse_line(line: &str) -> Result<Option<Event>, String> {
         ("event_msg", "user_message") => "prompt",
         ("response_item", "message") if p["role"] == "user" => "prompt",
         ("event_msg", "item_completed")
-            if p["item"]["type"] == "user_message" || p["item"]["type"] == "userMessage" =>
+            if p["item"]["type"] == "user_message" || p["item"]["type"] == "userMessage" || p["item"]["type"] == "UserMessage" =>
         {
             "prompt"
         }
