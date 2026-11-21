@@ -68,11 +68,17 @@ export function splitTurn(turn: Turn, zone: string): Segment[] {
   } while (start < end);
   return out;
 }
-export function packSegments(segments: Segment[]): Segment[] {
+export type TimelinePlacement = {
+  top: number;
+  height: number;
+  lane: number;
+  lanes: number;
+};
+export function packSegments<T extends TimelinePlacement>(segments: T[]): T[] {
   const sorted = segments
     .map((s) => ({ ...s }))
     .sort((a, b) => a.top - b.top || b.height - a.height);
-  let group: Segment[] = [];
+  let group: T[] = [];
   let ends: number[] = [];
   let boundary = -1;
   const finish = () => {
