@@ -8,6 +8,7 @@ import {
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { appendFileSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 declare global {
   interface Window {
     __observedBusy: boolean;
@@ -32,8 +33,10 @@ async function launch() {
     env: {
       ...globalThis.process.env,
       CODEX_HOME: logs,
+      REI_DATA_DIR: path.join(root, "rei"),
       APPDATA: appdata,
       CODECAL_DATA_DIR: appdata,
+      WEBVIEW2_USER_DATA_FOLDER: path.join(root, "webview"),
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=9223",
     },
   });
@@ -79,17 +82,30 @@ async function launch() {
   ).not.toBeVisible();
 }
 async function stop() {
-  await browser?.close();
-  if (process?.pid) {
+  if (process?.pid && process.exitCode === null) {
     try {
-      execFileSync("taskkill", ["/pid", String(process.pid), "/t", "/f"], {
-        windowsHide: true,
-        stdio: "ignore",
-      });
+      // Let WebView2 release the isolated profile before immediately reopening it.
+      execFileSync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-Command",
+          `$app=Get-Process -Id ${process.pid} -ErrorAction SilentlyContinue; if($app){if(!$app.CloseMainWindow()){throw 'Window close failed'}; if(!$app.WaitForExit(10000)){throw 'Application did not exit normally'}}`,
+        ],
+        { windowsHide: true, stdio: "pipe" },
+      );
     } catch {
-      /* Window may already have closed. */
+      try {
+        execFileSync("taskkill", ["/pid", String(process.pid), "/t", "/f"], {
+          windowsHide: true,
+          stdio: "ignore",
+        });
+      } catch {
+        /* Window may already have closed. */
+      }
     }
   }
+  await browser?.close().catch(() => {});
 }
 test("native Tauri: import, calendars, detail, watch append and restart SQLite", async () => {
   // Includes a 35-second watcher reconciliation allowance and native restarts.
@@ -439,5 +455,104 @@ test("grouped activity keeps gaps out of totals and opens every original turn", 
     ).toBeVisible();
   } finally {
     await stop();
+  }
+});
+
+test("Rei SQLite: settings, WAL import, source detail, automatic append and restart", async () => {
+  const reiRoot = path.join(root, "rei");
+  mkdirSync(reiRoot, { recursive: true });
+  writeFileSync(
+    path.join(reiRoot, "projects.json"),
+    JSON.stringify({
+      projects: [
+        { id: "rei-sample", name: "れいサンプル", path: "C:/sample/Rei" },
+      ],
+    }),
+  );
+  const db = new DatabaseSync(path.join(reiRoot, "storage.db"));
+  db.exec(
+    "PRAGMA journal_mode=WAL; CREATE TABLE agent_events(project_id TEXT,sequence INTEGER,id TEXT,event_type TEXT,record TEXT,PRIMARY KEY(project_id,sequence)); CREATE TABLE turns(project_id TEXT,run_id TEXT,record TEXT)",
+  );
+  const add = (
+    sequence: number,
+    id: string,
+    runId: string,
+    type: string,
+    timestamp: string,
+  ) =>
+    db.prepare("INSERT INTO agent_events VALUES(?,?,?,?,?)").run(
+      "rei-sample",
+      sequence,
+      id,
+      type,
+      JSON.stringify({
+        id,
+        projectId: "rei-sample",
+        sessionId: "rei-session",
+        turnId: runId,
+        runId,
+        type,
+        timestamp,
+        version: 1,
+        payload: {},
+      }),
+    );
+  add(1, "rei-start", "rei-run", "AGENT_RUN_STARTED", "2026-11-20T06:00:00Z");
+  add(2, "rei-end", "rei-run", "AGENT_RUN_COMPLETED", "2026-11-20T06:30:00Z");
+  db.prepare("INSERT INTO turns VALUES(?,?,?)").run(
+    "rei-sample",
+    "rei-run",
+    JSON.stringify({ request: "れいの履歴を確認する" }),
+  );
+  try {
+    await launch();
+    await page.getByRole("button", { name: "設定", exact: true }).click();
+    await page.getByLabel("れいの実行履歴を取り込む").check();
+    await page.getByLabel("れい データディレクトリ").fill(reiRoot);
+    await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+    await expect(page.getByLabel("れいサンプル を表示")).toBeVisible();
+    for (const label of ["codecal を表示", "editor を表示", "grouped を表示"]) {
+      const checkbox = page.getByLabel(label);
+      if (await checkbox.count()) await checkbox.uncheck();
+    }
+    await page.getByLabel("表示日").fill("2026-11-20");
+    await expect(page.getByTestId("total-elapsed")).toHaveText("0h 30m");
+    await page.getByRole("button", { name: /れいサンプル.*15:00/ }).click();
+    await expect(page.getByRole("dialog")).toContainText("れい への依頼");
+    await expect(page.getByRole("dialog")).toContainText(
+      "れいの履歴を確認する",
+    );
+    await page.getByRole("button", { name: "ログの該当箇所を表示" }).click();
+    await expect(page.locator(".log-excerpt")).toContainText("rei-start");
+    await page.getByRole("button", { name: "閉じる", exact: true }).click();
+    add(
+      3,
+      "rei-start-2",
+      "rei-run-2",
+      "AGENT_RUN_STARTED",
+      "2026-11-20T06:40:00Z",
+    );
+    add(
+      4,
+      "rei-end-2",
+      "rei-run-2",
+      "AGENT_RUN_CANCELLED",
+      "2026-11-20T07:10:00Z",
+    );
+    await expect(page.getByTestId("total-elapsed")).toHaveText("1h 0m", {
+      timeout: 15000,
+    });
+    await stop();
+    await launch();
+    await expect(page.getByLabel("れいサンプル を表示")).toBeVisible();
+    await page.getByRole("button", { name: "設定", exact: true }).click();
+    await expect(page.getByLabel("れいの実行履歴を取り込む")).toBeChecked();
+    await expect(page.getByLabel("れい データディレクトリ")).toHaveValue(
+      reiRoot,
+    );
+    await page.getByRole("button", { name: "閉じる", exact: true }).click();
+  } finally {
+    await stop();
+    db.close();
   }
 });

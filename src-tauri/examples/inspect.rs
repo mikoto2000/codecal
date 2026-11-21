@@ -5,7 +5,12 @@ fn main() -> Result<(), String> {
     let db = std::path::Path::new(args.get(2).ok_or("database path required")?);
     let mut store = Store::open(db)?;
     let started = std::time::Instant::now();
-    let progress = store.sync(root)?;
+    let rei = args.get(3).is_some_and(|s| s == "--rei");
+    let progress = if rei {
+        store.sync_rei(root)?
+    } else {
+        store.sync(root)?
+    };
     let snapshot = store.snapshot("Asia/Tokyo")?;
     println!(
         "files={} bytes={} projects={} turns={} days={} diagnostic_files={} elapsed_ms={}",
@@ -25,7 +30,11 @@ fn main() -> Result<(), String> {
         },
     );
     println!("statuses={statuses:?}");
-    let result = store.sync(root)?;
+    let result = if rei {
+        store.sync_rei(root)?
+    } else {
+        store.sync(root)?
+    };
     println!("unchanged_sync_bytes={}", result.bytes_read);
     Ok(())
 }

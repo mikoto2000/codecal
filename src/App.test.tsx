@@ -52,6 +52,8 @@ beforeEach(() => {
   vi.mocked(api.boot).mockResolvedValue({
     config: {
       log_root: "/logs",
+      rei_enabled: false,
+      rei_root: "/rei",
       timezone: "UTC",
       week_start: 1,
       theme: "system",
@@ -156,6 +158,36 @@ it("saves theme and timezone configuration", async () => {
   await waitFor(() =>
     expect(document.documentElement.dataset.theme).toBe("dark"),
   );
+});
+it("saves the Rei source independently of Codex", async () => {
+  await mount();
+  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  const root = screen.getByLabelText("れい データディレクトリ");
+  expect(root).toBeDisabled();
+  fireEvent.click(screen.getByLabelText("れいの実行履歴を取り込む"));
+  fireEvent.change(root, { target: { value: "/rei-data" } });
+  fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
+  await waitFor(() =>
+    expect(api.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        log_root: "/logs",
+        rei_enabled: true,
+        rei_root: "/rei-data",
+      }),
+    ),
+  );
+});
+it("shows Rei attribution and its request in the activity detail", async () => {
+  vi.mocked(api.snapshot).mockResolvedValue({
+    ...data,
+    turns: data.turns.map((t) => ({ ...t, source: "rei" })),
+  });
+  await mount();
+  fireEvent.click(
+    screen.getByRole("button", { name: /Sample project.*10:00/ }),
+  );
+  expect(screen.getByRole("dialog")).toHaveTextContent("れい への依頼");
+  expect(screen.getByRole("dialog")).toHaveTextContent("実行 ID");
 });
 it("shows import diagnostics", async () => {
   vi.mocked(api.snapshot).mockResolvedValue({

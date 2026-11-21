@@ -1,6 +1,6 @@
 # SQLite データモデル
 
-アプリデータ下の codecal.db に保存します。foreign_keys=ON、journal_mode=WAL、busy_timeout=10秒。スキーマバージョンはPRAGMA user_versionとschema_migrationsで管理します。現行は1、新しいバージョンのDBはダウングレードせず拒否します。
+アプリデータ下の codecal.db に保存します。foreign_keys=ON、journal_mode=WAL、busy_timeout=10秒。スキーマバージョンはPRAGMA user_versionとschema_migrationsで管理します。現行は2、新しいバージョンのDBはダウングレードせず拒否します。v1からの移行はトランザクションで行い、既存ターンの取得元は `codex` とします。既存のプロジェクト名・色・設定を維持します。
 
 | テーブル           | 主な列・制約                                                                                                                                  |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -28,3 +28,9 @@ cwdが変わるセッションではturn_contextでターンのproject_idを更�
 ## RoamingからLocalへの移行
 
 Windowsの既定保存先は `%LOCALAPPDATA%/dev.codecal.desktop/codecal.db` です。旧RoamingにDBがあり、LocalにDBがなければ、読み取り専用接続とSQLite backup APIで一時DBへスナップショットを取り、既存ファイルを上書きしない操作でLocalへ確定します。WALに残るコミット済みデータも含まれます。旧DBは残し、既存Local DBがあればそちらを優先します。環境変数による保存先指定では、この移行を実施しません。
+
+## れい対応（v2）
+
+`turns` に `source`（codex / rei）、`native_session_id`、`native_turn_id` を追加します。SQLite・旧JSONLの出典は `rei_event_sources`、プロジェクト別sequenceは `rei_sync`、JSONLの読み取り位置は `rei_file_sync` に保存します。正規化イベントと区間はCodexと共通です。詳細は [れいの実行履歴](rei-history.md) を参照してください。
+
+イベント更新と同じトランザクションで `settings._activity_dirty` を設定し、派生テーブルの再構築と同時に解除します。変更がない同期では再構築せず、中断後はDBオープン時にも未反映の更新を再生します。

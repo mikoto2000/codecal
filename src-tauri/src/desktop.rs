@@ -9,12 +9,36 @@ use tauri::{Emitter, Manager, State};
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
     pub log_root: String,
+    #[serde(default = "default_rei_enabled")]
+    pub rei_enabled: bool,
+    #[serde(default = "default_rei_root")]
+    pub rei_root: String,
     pub timezone: String,
     pub week_start: u8,
     pub theme: String,
     #[serde(deserialize_with = "read_thresholds")]
     pub thresholds: [f64; 3],
     pub auto_refresh: bool,
+}
+fn default_rei_root() -> String {
+    crate::rei::default_root().display().to_string()
+}
+fn default_rei_enabled() -> bool {
+    crate::rei::default_root().is_dir()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn old_configuration_gets_rei_defaults_and_keeps_existing_preferences() {
+        let c: Config = serde_json::from_str(r#"{"log_root":"/logs","timezone":"Asia/Tokyo","week_start":0,"theme":"dark","thresholds":[1,3,6],"auto_refresh":false}"#).unwrap();
+        assert_eq!(c.rei_root, default_rei_root());
+        assert_eq!(c.rei_enabled, default_rei_enabled());
+        assert_eq!(c.timezone, "Asia/Tokyo");
+        assert_eq!(c.theme, "dark");
+        assert!(!c.auto_refresh);
+    }
 }
 fn read_thresholds<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
@@ -28,6 +52,8 @@ fn read_thresholds<'de, D: serde::Deserializer<'de>>(
 impl Default for Config {
     fn default() -> Self {
         Self {
+            rei_enabled: default_rei_enabled(),
+            rei_root: default_rei_root(),
             log_root: std::env::var("CODEX_HOME").unwrap_or_else(|_| {
                 let home = std::env::var("USERPROFILE")
                     .or_else(|_| std::env::var("HOME"))
@@ -86,8 +112,8 @@ pub async fn save_config(state: State<'_, AppState>, value: Config) -> Result<()
     {
         return Err("設定値を確認してください（時差名・しきい値の昇順）".into());
     }
-    if !PathBuf::from(&value.log_root).is_dir() {
-        return Err("ログディレクトリが存在しません".into());
+    if value.log_root.trim().is_empty() || (value.rei_enabled && value.rei_root.trim().is_empty()) {
+        return Err("ログディレクトリを指定してください".into());
     }
     state.store.lock().map_err(|e| e.to_string())?.set_setting(
         "config",
@@ -110,12 +136,17 @@ fn sync_app(app: &tauri::AppHandle) -> Result<Progress, String> {
     let state = app.state::<AppState>();
     let mut store = state.store.lock().map_err(|e| e.to_string())?;
     let c = config(&store)?;
-    let result = store.sync_progress(&PathBuf::from(c.log_root), |done, total| {
-        let _ = app.emit(
-            "sync-progress",
-            serde_json::json!({"done":done,"total":total}),
-        );
-    });
+    let rei_root = PathBuf::from(c.rei_root);
+    let result = store.sync_sources(
+        &PathBuf::from(c.log_root),
+        c.rei_enabled.then_some(rei_root.as_path()),
+        |done, total| {
+            let _ = app.emit(
+                "sync-progress",
+                serde_json::json!({"done":done,"total":total}),
+            );
+        },
+    );
     if result.is_ok() {
         let _ = app.emit("data-changed", ());
     }
@@ -200,17 +231,33 @@ pub fn run() {
                     let _ = sender.send(result);
                 })
                 .ok();
-                let mut watching = String::new();
+                let mut watching: Vec<String> = Vec::new();
                 let mut dirty: Option<Instant> = None;
                 let mut first_dirty: Option<Instant> = None;
                 let mut last_scan = Instant::now();
                 loop {
                     if let Ok(event) = receiver.recv_timeout(Duration::from_millis(300)) {
                         match event {
-                            Ok(_) => {
+                            Ok(event)
+                                if event.paths.iter().any(|p| {
+                                    p.extension().is_some_and(|ext| ext == "jsonl")
+                                        || p.file_name().is_some_and(|name| {
+                                            matches!(
+                                                name.to_str(),
+                                                Some(
+                                                    "storage.db"
+                                                        | "storage.db-wal"
+                                                        | "projects.json"
+                                                )
+                                            )
+                                        })
+                                        || p.is_dir()
+                                }) =>
+                            {
                                 dirty = Some(Instant::now());
                                 first_dirty.get_or_insert(Instant::now());
                             }
+                            Ok(_) => {}
                             Err(_) => {
                                 let _ = handle
                                     .emit("sync-error", "ファイル監視エラー。定期走査で補完します");
@@ -224,19 +271,25 @@ pub fn run() {
                         };
                         config(&store).unwrap_or_default()
                     };
-                    if c.log_root != watching {
+                    let mut roots = vec![c.log_root];
+                    if c.rei_enabled && !roots.contains(&c.rei_root) {
+                        roots.push(c.rei_root);
+                    }
+                    if roots != watching {
                         if let Some(w) = watcher.as_mut() {
-                            if !watching.is_empty() {
-                                let _ = w.unwatch(std::path::Path::new(&watching));
+                            for root in &watching {
+                                let _ = w.unwatch(std::path::Path::new(root));
                             }
-                            if let Err(e) =
-                                w.watch(std::path::Path::new(&c.log_root), RecursiveMode::Recursive)
-                            {
-                                let _ =
-                                    handle.emit("sync-error", format!("監視を開始できません: {e}"));
+                            for root in &roots {
+                                if let Err(e) =
+                                    w.watch(std::path::Path::new(root), RecursiveMode::Recursive)
+                                {
+                                    let _ = handle
+                                        .emit("sync-error", format!("監視を開始できません: {e}"));
+                                }
                             }
                         }
-                        watching = c.log_root;
+                        watching = roots;
                     }
                     if c.auto_refresh
                         && (dirty.is_some_and(|t| t.elapsed() >= Duration::from_millis(600))
