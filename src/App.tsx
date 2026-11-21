@@ -123,6 +123,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
     [error, setError] = useState(""),
     [progress, setProgress] = useState(""),
     [notice, setNotice] = useState("");
+  const [firstRun, setFirstRun] = useState(false);
   const [selected, setSelected] = useState<Turn | null>(null),
     [selectedDay, setSelectedDay] = useState<string | null>(null),
     [showSettings, setShowSettings] = useState(false),
@@ -165,6 +166,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
       .then(async (b) => {
         if (!alive) return;
         setConfig(b.config);
+        setFirstRun(b.first_run);
         zoneRef.current = b.config.timezone;
         setDbPath(b.db_path);
         setNotice(
@@ -449,6 +451,22 @@ export default function App({ initialDate }: { initialDate?: string }) {
             </div>
           </div>
         </header>
+        {firstRun && config && (
+          <section className="setup-notice" aria-label="はじめての設定">
+            <strong>
+              はじめに、取り込み先とタイムゾーンを確認してください。
+            </strong>
+            <p>
+              Codex: {config.log_root} · タイムゾーン: {config.timezone}
+              {config.rei_enabled && ` · れい: ${config.rei_root}`}
+            </p>
+            <p>
+              ログの保存先が異なる場合は設定で変更できます。元のログは変更しません。
+            </p>
+            <button onClick={openSettings}>初期設定を確認</button>
+            <button onClick={() => setFirstRun(false)}>案内を閉じる</button>
+          </section>
+        )}
         {error && (
           <div role="alert" className="error-banner">
             {error}

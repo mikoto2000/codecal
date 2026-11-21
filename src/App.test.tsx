@@ -62,7 +62,7 @@ beforeEach(() => {
       auto_refresh: true,
     },
     db_path: "/data/codecal.db",
-    first_run: true,
+    first_run: false,
   });
   vi.mocked(api.snapshot).mockResolvedValue(data);
   vi.mocked(api.sync).mockResolvedValue({
@@ -77,6 +77,31 @@ const mount = async () => {
   render(<App initialDate="2026-11-20" />);
   await screen.findByRole("button", { name: /Sample project.*10:00/ });
 };
+it("offers detected settings on first launch without blocking the calendar", async () => {
+  const boot = await api.boot();
+  vi.mocked(api.boot).mockResolvedValue({ ...boot, first_run: true });
+  await mount();
+  const setup = screen.getByRole("region", { name: "はじめての設定" });
+  expect(setup).toHaveTextContent("/logs");
+  expect(setup).toHaveTextContent("UTC");
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  fireEvent.click(
+    within(setup).getByRole("button", { name: "初期設定を確認" }),
+  );
+  expect(screen.getByRole("dialog", { name: "設定" })).toBeInTheDocument();
+  expect(screen.getByLabelText("Codex ログディレクトリ")).toHaveValue("/logs");
+  fireEvent.click(screen.getByRole("button", { name: "閉じる" }));
+  fireEvent.click(within(setup).getByRole("button", { name: "案内を閉じる" }));
+  expect(
+    screen.queryByRole("region", { name: "はじめての設定" }),
+  ).not.toBeInTheDocument();
+});
+it("does not show first-launch guidance for a saved configuration", async () => {
+  await mount();
+  expect(
+    screen.queryByRole("region", { name: "はじめての設定" }),
+  ).not.toBeInTheDocument();
+});
 it("renders weekly activity and confirmed totals", async () => {
   await mount();
   expect(screen.getByTestId("total-elapsed")).toHaveTextContent("2h 0m");

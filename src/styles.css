@@ -571,6 +571,22 @@ footer button {
   background: var(--sidebar);
   border-top: 1px solid var(--border);
 }
+.setup-notice {
+  flex-shrink: 0;
+  padding: 12px 15px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--sidebar);
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.setup-notice p {
+  margin: 6px 0;
+}
+.setup-notice button + button {
+  margin-left: 8px;
+}
 .error-banner {
   padding: 12px 15px;
   background: #7f1d1d;
