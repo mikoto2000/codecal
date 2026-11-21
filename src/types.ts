@@ -1,5 +1,8 @@
 export type Project = { id: string; cwd: string; name: string; color: string };
 export type Turn = {
+  source?: "codex" | "rei";
+  native_session_id?: string | null;
+  native_turn_id?: string | null;
   id: string;
   session_id: string;
   turn_id: string;
@@ -24,6 +27,8 @@ export type Snapshot = {
 };
 export type Config = {
   log_root: string;
+  rei_enabled: boolean;
+  rei_root: string;
   timezone: string;
   week_start: number;
   theme: "system" | "light" | "dark";

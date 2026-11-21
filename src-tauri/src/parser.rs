@@ -2,6 +2,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_turn_id: Option<String>,
     pub timestamp: i64,
     pub kind: String,
     pub session_id: Option<String>,
@@ -63,6 +71,10 @@ pub fn parse_line(line: &str) -> Result<Option<Event>, String> {
         None
     };
     Ok(Some(Event {
+        source: None,
+        project_name: None,
+        native_session_id: None,
+        native_turn_id: None,
         timestamp,
         kind: kind.into(),
         session_id: if kind == "meta" {

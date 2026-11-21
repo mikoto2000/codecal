@@ -46,6 +46,7 @@ async function launch() {
     env: {
       ...globalThis.process.env,
       CODEX_HOME: logs,
+      REI_DATA_DIR: path.join(root, "unused-rei"),
       CODECAL_DATA_DIR: data,
       WEBVIEW2_USER_DATA_FOLDER: path.join(root, "webview"),
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=9223",

@@ -1,7 +1,7 @@
 # アーキテクチャ
 
 ```text
-read-only JSONL → bounded BufReader → normalized events → SQLite transactions
+read-only Codex JSONL / Rei SQLite・JSONL → normalized events → SQLite transactions
                                                  ↓ replay by session/turn
                                        projects / sessions / turns / intervals
                                                  ↓ UTC + IANA zone aggregation
@@ -45,3 +45,7 @@ DBの実パスから状態ファイルの絶対パスを作り、公式プラグ
 プラグインの保存対象はSIZE / POSITION / MAXIMIZED / VISIBLE。状態ファイルがない・壊れている場合は初期状態で開き、保存位置に対応するモニターがない場合はOSの配置を使います。自前のウィンドウ状態パーサーや移動イベント処理は追加していません。
 
 公式仕様: https://v2.tauri.app/plugin/window-state/
+
+## れいの読み取り
+
+`rei` はSQLite・旧JSONLを共通イベントへ正規化します。時間集計とカレンダーは既存処理を使い、同じ作業パスは同じプロジェクトへ集約します。設定・監視・診断・出典表示も取得元ごとに扱います。保存形式と互換性は [れいの実行履歴](rei-history.md) を参照してください。

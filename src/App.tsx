@@ -164,7 +164,9 @@ export default function App({ initialDate }: { initialDate?: string }) {
         setConfig(b.config);
         zoneRef.current = b.config.timezone;
         setDbPath(b.db_path);
-        setNotice(`解析対象: ${b.config.log_root}  ·  保存先: ${b.db_path}`);
+        setNotice(
+          `解析対象: Codex ${b.config.log_root}${b.config.rei_enabled ? ` / れい ${b.config.rei_root}` : ""}  ·  保存先: ${b.db_path}`,
+        );
         await reload(b.config.timezone);
         if (alive) {
           setLoading(false);
@@ -299,6 +301,9 @@ export default function App({ initialDate }: { initialDate?: string }) {
     try {
       await api.save(draft);
       setConfig(draft);
+      setNotice(
+        `解析対象: Codex ${draft.log_root}${draft.rei_enabled ? ` / れい ${draft.rei_root}` : ""}  ·  保存先: ${dbPath}`,
+      );
       zoneRef.current = draft.timezone;
       setShowSettings(false);
       await reload(draft.timezone);
@@ -784,7 +789,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
         </main>
         <footer>
           <span title={notice}>
-            {notice || "ローカルの Codex ログを読み取り専用で解析します"}
+            {notice || "ローカルの実行履歴を読み取り専用で解析します"}
           </span>
           <button onClick={() => setShowDiagnostics(true)}>
             診断{" "}
@@ -871,6 +876,8 @@ export default function App({ initialDate }: { initialDate?: string }) {
           )}
           <span className="status-pill">{statusLabel[selected.status]}</span>
           <dl>
+            <dt>取得元</dt>
+            <dd>{selected.source === "rei" ? "れい" : "Codex"}</dd>
             <dt>作業ディレクトリ</dt>
             <dd>{projects.get(selected.project_id)?.cwd}</dd>
             <dt>開始日時</dt>
@@ -888,13 +895,23 @@ export default function App({ initialDate }: { initialDate?: string }) {
                 : formatDuration(selected.end - selected.start)}
             </dd>
             <dt>セッション ID</dt>
-            <dd>{selected.session_id}</dd>
-            <dt>ターン ID</dt>
+            <dd>
+              {selected.source === "rei"
+                ? (selected.native_session_id ?? "記録なし")
+                : selected.session_id}
+            </dd>
+            <dt>{selected.source === "rei" ? "実行 ID" : "ターン ID"}</dt>
             <dd>{selected.turn_id}</dd>
+            {selected.source === "rei" && selected.native_turn_id && (
+              <>
+                <dt>ターン ID</dt>
+                <dd>{selected.native_turn_id}</dd>
+              </>
+            )}
             <dt>トークン使用量</dt>
             <dd>{selected.tokens?.toLocaleString() ?? "取得できません"}</dd>
           </dl>
-          <h3>Codex への依頼</h3>
+          <h3>{selected.source === "rei" ? "れい" : "Codex"} への依頼</h3>
           <pre className="prompt">
             {selected.prompt || "依頼内容を取得できません"}
           </pre>
@@ -981,6 +998,30 @@ export default function App({ initialDate }: { initialDate?: string }) {
             <p className="hint">
               sessions と archived_sessions を含む Codex
               ホームを指定してください。保存先: {dbPath}
+            </p>
+            <label className="inline-check">
+              <input
+                type="checkbox"
+                checked={draft.rei_enabled}
+                onChange={(e) =>
+                  setDraft({ ...draft, rei_enabled: e.target.checked })
+                }
+              />
+              れいの実行履歴を取り込む
+            </label>
+            <label>
+              れい データディレクトリ
+              <input
+                value={draft.rei_root}
+                disabled={!draft.rei_enabled}
+                onChange={(e) =>
+                  setDraft({ ...draft, rei_root: e.target.value })
+                }
+              />
+            </label>
+            <p className="hint">
+              storage.db または projects
+              を含むディレクトリを指定してください。開発以外の実行も取り込みます。
             </p>
             <label>
               タイムゾーン

@@ -12,11 +12,19 @@ use std::{
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
 };
-fn err(e: impl std::fmt::Display) -> String {
+pub(crate) fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
-fn hash(s: impl AsRef<[u8]>) -> String {
+pub(crate) fn hash(s: impl AsRef<[u8]>) -> String {
     format!("{:x}", Sha256::digest(s.as_ref()))
+}
+pub(crate) fn mark_activity_dirty(conn: &Connection) -> Result<(), String> {
+    conn.execute(
+        "INSERT OR REPLACE INTO settings VALUES('_activity_dirty','1')",
+        [],
+    )
+    .map_err(err)?;
+    Ok(())
 }
 #[derive(Serialize)]
 pub struct Project {
@@ -27,6 +35,9 @@ pub struct Project {
 }
 #[derive(Serialize)]
 pub struct Turn {
+    pub source: String,
+    pub native_session_id: Option<String>,
+    pub native_turn_id: Option<String>,
     pub id: String,
     pub session_id: String,
     pub turn_id: String,
@@ -50,7 +61,7 @@ pub struct Progress {
     pub bytes_read: u64,
 }
 pub struct Store {
-    conn: Connection,
+    pub(crate) conn: Connection,
 }
 struct Delta {
     path: String,
@@ -80,7 +91,7 @@ impl Store {
         let version: i64 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .map_err(err)?;
-        if version > 1 {
+        if version > 2 {
             return Err("このデータベースは新しい CodeCal で作成されています".into());
         }
         conn.busy_timeout(std::time::Duration::from_secs(10))
@@ -98,8 +109,22 @@ impl Store {
   CREATE TABLE IF NOT EXISTS diagnostics(path TEXT PRIMARY KEY,message TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
   INSERT OR IGNORE INTO schema_migrations VALUES(1);
-  PRAGMA user_version=1;").map_err(err)?;
-        Ok(Self { conn })
+  ").map_err(err)?;
+        if version < 2 {
+            conn.execute_batch("BEGIN IMMEDIATE;
+              ALTER TABLE turns ADD COLUMN source TEXT NOT NULL DEFAULT 'codex';
+              ALTER TABLE turns ADD COLUMN native_session_id TEXT;
+              ALTER TABLE turns ADD COLUMN native_turn_id TEXT;
+              CREATE TABLE rei_event_sources(event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,path TEXT NOT NULL,project TEXT NOT NULL,native_id TEXT NOT NULL,offset INTEGER,PRIMARY KEY(event_id,path));
+              CREATE TABLE rei_sync(path TEXT NOT NULL,project TEXT NOT NULL,sequence INTEGER NOT NULL,anchor TEXT NOT NULL,identity TEXT NOT NULL,PRIMARY KEY(path,project));
+              CREATE TABLE rei_file_sync(path TEXT PRIMARY KEY,offset INTEGER NOT NULL,head TEXT NOT NULL,head_len INTEGER NOT NULL,identity TEXT NOT NULL);
+              INSERT INTO schema_migrations VALUES(2);
+              PRAGMA user_version=2;
+              COMMIT;").map_err(err)?;
+        }
+        let mut store = Self { conn };
+        store.rebuild_if_dirty()?;
+        Ok(store)
     }
     pub fn get_setting(&self, key: &str) -> Result<Option<String>, String> {
         self.conn
@@ -132,6 +157,39 @@ impl Store {
     }
     pub fn sync(&mut self, root: &Path) -> Result<Progress, String> {
         self.sync_progress(root, |_, _| {})
+    }
+    pub fn sync_sources(
+        &mut self,
+        codex: &Path,
+        rei: Option<&Path>,
+        progress: impl Fn(usize, usize),
+    ) -> Result<Progress, String> {
+        let mut result = match self.sync_progress(codex, &progress) {
+            Ok(p) => {
+                self.rei_diagnostic(codex, None)?;
+                p
+            }
+            Err(e) => {
+                self.rei_diagnostic(codex, Some(&e))?;
+                Progress {
+                    files: 0,
+                    bytes_read: 0,
+                }
+            }
+        };
+        if let Some(root) = rei {
+            progress(0, 1);
+            match self.sync_rei(root) {
+                Ok(p) => {
+                    self.rei_diagnostic(root, None)?;
+                    result.files += p.files;
+                    result.bytes_read += p.bytes_read;
+                }
+                Err(e) => self.rei_diagnostic(root, Some(&e))?,
+            }
+        }
+        progress(result.files, result.files);
+        Ok(result)
     }
     pub fn sync_progress(
         &mut self,
@@ -181,7 +239,6 @@ impl Store {
         }
         files.sort();
         let mut bytes_read = 0;
-        let mut changed = false;
         let total = files.len();
         let mut cursors: BTreeMap<String, Cursor> = BTreeMap::new();
         {
@@ -277,7 +334,6 @@ impl Store {
                 if d.bytes == 0 && !d.reset {
                     continue;
                 }
-                changed = true;
                 let tx = self.conn.transaction().map_err(err)?;
                 if d.reset {
                     tx.execute("DELETE FROM event_sources WHERE path=?", [&d.path])
@@ -322,18 +378,23 @@ impl Store {
                     tx.execute("DELETE FROM diagnostics WHERE path=?", [&d.path])
                         .map_err(err)?;
                 }
-                tx.execute("DELETE FROM events WHERE NOT EXISTS(SELECT 1 FROM event_sources WHERE event_id=events.id)",[]).map_err(err)?;
+                tx.execute("DELETE FROM events WHERE NOT EXISTS(SELECT 1 FROM event_sources WHERE event_id=events.id) AND NOT EXISTS(SELECT 1 FROM rei_event_sources WHERE event_id=events.id)",[]).map_err(err)?;
+                mark_activity_dirty(&tx)?;
                 tx.commit().map_err(err)?;
             }
             progress(((batch_index + 1) * 4).min(total), total);
         }
-        if changed {
-            self.rebuild()?;
-        }
+        self.rebuild_if_dirty()?;
         Ok(Progress {
             files: total,
             bytes_read,
         })
+    }
+    pub(crate) fn rebuild_if_dirty(&mut self) -> Result<(), String> {
+        if self.get_setting("_activity_dirty")?.is_some() {
+            self.rebuild()?;
+        }
+        Ok(())
     }
     fn rebuild(&mut self) -> Result<(), String> {
         let events: Vec<(String, String, Event)> = {
@@ -372,7 +433,10 @@ impl Store {
                 *dir = normalize_path(d);
             }
             let pid = hash(dir.as_bytes());
-            let name = dir.rsplit('/').find(|s| !s.is_empty()).unwrap_or("Unknown");
+            let name = e
+                .project_name
+                .as_deref()
+                .unwrap_or_else(|| dir.rsplit('/').find(|s| !s.is_empty()).unwrap_or("Unknown"));
             const COLORS: [&str; 8] = [
                 "#14b8a6", "#818cf8", "#f59e0b", "#f472b6", "#38bdf8", "#a3e635", "#fb923c",
                 "#c084fc",
@@ -388,6 +452,9 @@ impl Store {
                 let id = format!("{sid}:{tid}");
                 active.insert(sid.clone(), tid.clone());
                 turns.entry(id.clone()).or_insert(Turn {
+                    source: e.source.unwrap_or_else(|| "codex".into()),
+                    native_session_id: e.native_session_id,
+                    native_turn_id: e.native_turn_id,
                     id,
                     session_id: sid.clone(),
                     turn_id: tid,
@@ -395,7 +462,7 @@ impl Store {
                     start: e.timestamp,
                     end: None,
                     status: "unknown".into(),
-                    prompt: pending.remove(&sid).unwrap_or_default(),
+                    prompt: e.text.or_else(|| pending.remove(&sid)).unwrap_or_default(),
                     tokens: None,
                 });
             } else if let Some(tid) = tid {
@@ -409,6 +476,15 @@ impl Store {
                         }
                         "tokens" => t.tokens = e.tokens,
                         "completed" | "failed" | "interrupted" if e.timestamp >= t.start => {
+                            if t.native_session_id.is_none() {
+                                t.native_session_id = e.native_session_id;
+                            }
+                            if t.native_turn_id.is_none() {
+                                t.native_turn_id = e.native_turn_id;
+                            }
+                            if let Some(text) = e.text.filter(|s| !s.is_empty()) {
+                                t.prompt = text;
+                            }
                             t.end = Some(e.timestamp);
                             t.status = e.kind;
                             if active.get(&sid) == Some(&t.turn_id) {
@@ -430,7 +506,7 @@ impl Store {
         }
         for t in turns.values() {
             tx.execute(
-                "INSERT INTO turns VALUES(?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO turns VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 params![
                     t.id,
                     t.session_id,
@@ -440,7 +516,10 @@ impl Store {
                     t.end,
                     t.status,
                     t.prompt,
-                    t.tokens
+                    t.tokens,
+                    t.source,
+                    t.native_session_id,
+                    t.native_turn_id
                 ],
             )
             .map_err(err)?;
@@ -450,6 +529,8 @@ impl Store {
             )
             .map_err(err)?;
         }
+        tx.execute("DELETE FROM settings WHERE key='_activity_dirty'", [])
+            .map_err(err)?;
         tx.commit().map_err(err)?;
         Ok(())
     }
@@ -467,10 +548,13 @@ impl Store {
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
-        let mut q=self.conn.prepare("SELECT id,session_id,turn_id,project_id,start,end,status,prompt,tokens FROM turns ORDER BY start").map_err(err)?;
+        let mut q=self.conn.prepare("SELECT id,session_id,turn_id,project_id,start,end,status,prompt,tokens,source,native_session_id,native_turn_id FROM turns ORDER BY start").map_err(err)?;
         let turns = q
             .query_map([], |r| {
                 Ok(Turn {
+                    source: r.get(9)?,
+                    native_session_id: r.get(10)?,
+                    native_turn_id: r.get(11)?,
                     id: r.get(0)?,
                     session_id: r.get(1)?,
                     turn_id: r.get(2)?,
@@ -517,6 +601,9 @@ impl Store {
         })
     }
     pub fn source_excerpt(&self, turn_id: &str) -> Result<String, String> {
+        if let Some(excerpt) = self.rei_excerpt(turn_id)? {
+            return Ok(excerpt);
+        }
         let (path,offset):(String,i64)=self.conn.query_row("SELECT es.path,es.offset FROM event_sources es JOIN events e ON e.id=es.event_id JOIN turns t ON t.session_id=e.session_id WHERE t.id=? AND e.ts>=t.start ORDER BY e.ts LIMIT 1",[turn_id],|r|Ok((r.get(0)?,r.get(1)?))).map_err(err)?;
         let mut f = File::open(&path).map_err(err)?;
         f.seek(SeekFrom::Start(offset as u64)).map_err(err)?;
