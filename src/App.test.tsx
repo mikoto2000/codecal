@@ -63,6 +63,7 @@ beforeEach(() => {
     },
     db_path: "/data/codecal.db",
     first_run: false,
+    notices: [],
   });
   vi.mocked(api.snapshot).mockResolvedValue(data);
   vi.mocked(api.sync).mockResolvedValue({
@@ -105,6 +106,31 @@ it("does not show first-launch guidance for a saved configuration", async () => 
 it("renders weekly activity and confirmed totals", async () => {
   await mount();
   expect(screen.getByTestId("total-elapsed")).toHaveTextContent("2h 0m");
+});
+it("shows timezone candidates and a resolved offset, including invalid input", async () => {
+  await mount();
+  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  const input = screen.getByLabelText("タイムゾーン", { exact: true });
+  expect(input).toHaveAttribute("list", "timezone-choices");
+  fireEvent.change(input, { target: { value: "Asia/Tokyo" } });
+  expect(screen.getByText(/現在の時差 UTC\+09:00/)).toBeInTheDocument();
+  fireEvent.change(input, { target: { value: "invalid/zone" } });
+  expect(
+    screen.getByText("タイムゾーンを確認してください（例: Asia/Tokyo、UTC）"),
+  ).toBeInTheDocument();
+});
+it("keeps a timezone fallback notice visible and links to settings", async () => {
+  const boot = await api.boot();
+  vi.mocked(api.boot).mockResolvedValue({
+    ...boot,
+    notices: [
+      "端末のタイムゾーンを認識できなかったため UTC を使用しています。",
+    ],
+  });
+  await mount();
+  expect(screen.getByText(/認識できなかったため UTC/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "タイムゾーンを確認" }));
+  expect(screen.getByRole("dialog", { name: "設定" })).toBeInTheDocument();
 });
 it("opens turn detail and reads local source only on request", async () => {
   await mount();

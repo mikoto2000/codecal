@@ -31,6 +31,35 @@ fn default_rei_enabled() -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn first_boot_reports_unknown_timezone_and_keeps_saved_choice() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let (c, first, notices) = bootstrap_config(&store, "invalid/zone".into()).unwrap();
+        assert!(first);
+        assert_eq!(c.timezone, "UTC");
+        assert!(notices[0].contains("UTC"));
+        let (c, first, notices) = bootstrap_config(&store, "Asia/Tokyo".into()).unwrap();
+        assert!(!first);
+        assert_eq!(c.timezone, "UTC");
+        assert!(notices.is_empty());
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let (c, _, notices) = bootstrap_config(&store, "Asia/Tokyo".into()).unwrap();
+        assert_eq!(c.timezone, "Asia/Tokyo");
+        assert!(notices.is_empty());
+    }
+    #[test]
+    fn settings_validation_identifies_the_invalid_field() {
+        let mut c = Config {
+            timezone: "invalid/zone".into(),
+            ..Config::default()
+        };
+        assert!(validate_config(&c).unwrap_err().contains("タイムゾーン"));
+        c.timezone = "Asia/Tokyo".into();
+        c.thresholds = [3., 1., 6.];
+        assert!(validate_config(&c).unwrap_err().contains("しきい値"));
+        c.thresholds = [1., 3., 6.];
+        assert!(validate_config(&c).is_ok());
+    }
+    #[test]
     fn old_configuration_gets_rei_defaults_and_keeps_existing_preferences() {
         let c: Config = serde_json::from_str(r#"{"log_root":"/logs","timezone":"Asia/Tokyo","week_start":0,"theme":"dark","thresholds":[1,3,6],"auto_refresh":false}"#).unwrap();
         assert_eq!(c.rei_root, default_rei_root());
@@ -102,6 +131,7 @@ pub struct Bootstrap {
     config: Config,
     db_path: String,
     first_run: bool,
+    notices: Vec<String>,
 }
 fn config(store: &Store) -> Result<Config, String> {
     store
@@ -112,20 +142,33 @@ fn config(store: &Store) -> Result<Config, String> {
 #[tauri::command]
 pub async fn bootstrap(state: State<'_, AppState>, timezone: String) -> Result<Bootstrap, String> {
     let store = state.store.lock().map_err(|e| e.to_string())?;
+    let (c, first_run, notices) = bootstrap_config(&store, timezone)?;
+    Ok(Bootstrap {
+        config: c,
+        db_path: state.db_path.clone(),
+        first_run,
+        notices,
+    })
+}
+fn bootstrap_config(
+    store: &Store,
+    timezone: String,
+) -> Result<(Config, bool, Vec<String>), String> {
     let first_run = store.get_setting("config")?.is_none();
-    let mut c = config(&store)?;
-    if first_run && timezone.parse::<chrono_tz::Tz>().is_ok() {
-        c.timezone = timezone;
+    let mut c = config(store)?;
+    let mut notices = vec![];
+    if first_run {
+        if timezone.parse::<chrono_tz::Tz>().is_ok() {
+            c.timezone = timezone;
+        } else {
+            notices.push(format!("端末のタイムゾーン「{timezone}」を認識できなかったため UTC を使用しています。設定で確認してください。"));
+        }
         store.set_setting(
             "config",
             &serde_json::to_string(&c).map_err(|e| e.to_string())?,
         )?;
     }
-    Ok(Bootstrap {
-        config: c,
-        db_path: state.db_path.clone(),
-        first_run,
-    })
+    Ok((c, first_run, notices))
 }
 fn log_root_warnings(value: &Config) -> Vec<String> {
     let mut warnings = vec![];
@@ -143,23 +186,33 @@ fn log_root_warnings(value: &Config) -> Vec<String> {
 }
 #[tauri::command]
 pub async fn save_config(state: State<'_, AppState>, value: Config) -> Result<Vec<String>, String> {
-    if value.timezone.parse::<chrono_tz::Tz>().is_err()
-        || ![0, 1].contains(&value.week_start)
-        || !["system", "light", "dark"].contains(&value.theme.as_str())
-        || value.thresholds.iter().any(|v| !v.is_finite() || *v <= 0.)
-        || value.thresholds.windows(2).any(|w| w[0] >= w[1])
-    {
-        return Err("設定値を確認してください（時差名・しきい値の昇順）".into());
-    }
-    if value.log_root.trim().is_empty() || (value.rei_enabled && value.rei_root.trim().is_empty()) {
-        return Err("ログディレクトリを指定してください".into());
-    }
+    validate_config(&value)?;
     let warnings = log_root_warnings(&value);
     state.store.lock().map_err(|e| e.to_string())?.set_setting(
         "config",
         &serde_json::to_string(&value).map_err(|e| e.to_string())?,
     )?;
     Ok(warnings)
+}
+fn validate_config(value: &Config) -> Result<(), String> {
+    if value.timezone.parse::<chrono_tz::Tz>().is_err() {
+        return Err("タイムゾーンを確認してください（例: Asia/Tokyo、UTC）".into());
+    }
+    if ![0, 1].contains(&value.week_start) {
+        return Err("週の開始曜日を確認してください".into());
+    }
+    if !["system", "light", "dark"].contains(&value.theme.as_str()) {
+        return Err("テーマを確認してください".into());
+    }
+    if value.thresholds.iter().any(|v| !v.is_finite() || *v <= 0.)
+        || value.thresholds.windows(2).any(|w| w[0] >= w[1])
+    {
+        return Err("ヒートマップのしきい値は正の数を昇順で指定してください".into());
+    }
+    if value.log_root.trim().is_empty() || (value.rei_enabled && value.rei_root.trim().is_empty()) {
+        return Err("ログディレクトリを指定してください".into());
+    }
+    Ok(())
 }
 #[tauri::command]
 pub async fn snapshot(app: tauri::AppHandle, timezone: String) -> Result<Snapshot, String> {

@@ -124,6 +124,14 @@ export default function App({ initialDate }: { initialDate?: string }) {
     [progress, setProgress] = useState(""),
     [notice, setNotice] = useState("");
   const [firstRun, setFirstRun] = useState(false);
+  const [bootNotices, setBootNotices] = useState<string[]>([]);
+  const timezoneChoices = useMemo(() => {
+    try {
+      return ["UTC", ...Intl.supportedValuesOf("timeZone")];
+    } catch {
+      return ["UTC", "Asia/Tokyo", "Europe/London", "America/New_York"];
+    }
+  }, []);
   const [selected, setSelected] = useState<Turn | null>(null),
     [selectedDay, setSelectedDay] = useState<string | null>(null),
     [showSettings, setShowSettings] = useState(false),
@@ -167,6 +175,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
         if (!alive) return;
         setConfig(b.config);
         setFirstRun(b.first_run);
+        setBootNotices(b.notices);
         zoneRef.current = b.config.timezone;
         setDbPath(b.db_path);
         setNotice(
@@ -451,6 +460,14 @@ export default function App({ initialDate }: { initialDate?: string }) {
             </div>
           </div>
         </header>
+        {bootNotices.length > 0 && (
+          <div className="setup-notice" role="status">
+            {bootNotices.map((message) => (
+              <p key={message}>{message}</p>
+            ))}
+            <button onClick={openSettings}>タイムゾーンを確認</button>
+          </div>
+        )}
         {firstRun && config && (
           <section className="setup-notice" aria-label="はじめての設定">
             <strong>
@@ -857,8 +874,10 @@ export default function App({ initialDate }: { initialDate?: string }) {
           )}
         </main>
         <footer>
-          <span title={notice}>
-            {notice || "ローカルの実行履歴を読み取り専用で解析します"}
+          <span
+            title={`${zone} · 現在の時差 UTC${DateTime.now().setZone(zone).toFormat("ZZ")} · ${notice}`}
+          >
+            {zone} · {notice || "ローカルの実行履歴を読み取り専用で解析します"}
           </span>
           <button onClick={() => setShowDiagnostics(true)}>
             診断{" "}
@@ -1111,11 +1130,25 @@ export default function App({ initialDate }: { initialDate?: string }) {
               <input
                 value={draft.timezone}
                 placeholder="Asia/Tokyo"
+                list="timezone-choices"
+                aria-describedby="timezone-preview"
                 onChange={(e) =>
                   setDraft({ ...draft, timezone: e.target.value })
                 }
               />
             </label>
+            <datalist id="timezone-choices">
+              {Array.from(new Set([draft.timezone, ...timezoneChoices])).map(
+                (value) => (
+                  <option key={value} value={value} />
+                ),
+              )}
+            </datalist>
+            <p className="hint" id="timezone-preview">
+              {DateTime.now().setZone(draft.timezone).isValid
+                ? `${draft.timezone} · 現在の時差 UTC${DateTime.now().setZone(draft.timezone).toFormat("ZZ")}`
+                : "タイムゾーンを確認してください（例: Asia/Tokyo、UTC）"}
+            </p>
             <label>
               週の開始曜日
               <select
