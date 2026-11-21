@@ -5,6 +5,7 @@ import {
   fireEvent,
   waitFor,
   act,
+  within,
 } from "@testing-library/react";
 import App from "./App";
 import { api } from "./api";
@@ -186,6 +187,42 @@ it("saves theme and timezone configuration", async () => {
   await waitFor(() =>
     expect(document.documentElement.dataset.theme).toBe("dark"),
   );
+});
+it("keeps save failures inside settings and allows correction and retry", async () => {
+  vi.mocked(api.save).mockRejectedValueOnce(
+    new Error("タイムゾーンが不正です"),
+  );
+  await mount();
+  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  fireEvent.change(screen.getByLabelText("タイムゾーン"), {
+    target: { value: "invalid" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
+  const dialog = screen.getByRole("dialog", { name: "設定" });
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "タイムゾーンが不正です",
+  );
+  expect(screen.getByLabelText("タイムゾーン")).toHaveValue("invalid");
+  fireEvent.change(screen.getByLabelText("タイムゾーン"), {
+    target: { value: "UTC" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+  );
+});
+it("shows refresh failures after a successful settings save in the workspace", async () => {
+  await mount();
+  await screen.findByText("同期済み");
+  vi.mocked(api.snapshot).mockRejectedValueOnce(
+    new Error("更新に失敗しました"),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "更新に失敗しました",
+  );
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
 it("saves the Rei source independently of Codex", async () => {
   await mount();
