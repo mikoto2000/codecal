@@ -31,3 +31,7 @@ FullCalendar Standardの非Premiumプラグインは [公式ライセンス](htt
 ## ローカル保存先
 
 端末固有ログの派生DBには `app_local_data_dir()` を使用します。WindowsはAppData/Local、macOSはLibrary/Application Support、LinuxはXDG_DATA_HOME（既定 .local/share）です。Windowsの旧Roaming保存先からは、LocalにDBがない場合だけSQLite backup APIでWALを含む整合したコピーを作り、上書き禁止の確定処理を使います。旧DBは削除しません。CODECAL_DATA_DIRを明示した場合は指定先だけを使い、通常プロファイルから移行しません。
+
+## カレンダーの表示モデル
+
+日・週・月は同一の日別インデックスを参照します。履歴、プロジェクト絞り込み、タイムゾーンの変更時にだけ区間分割と日次和集合を再計算し、月の各セルで全履歴を再走査しません。月は7列（曜日）と4〜6行（週）の配置です。ビューと表示日の変更は、スピナーを描画するフレームを確保した後、Reactのtransitionで反映します。
