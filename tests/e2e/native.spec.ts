@@ -85,6 +85,8 @@ async function stop() {
   }
 }
 test("native Tauri: import, calendars, detail, watch append and restart SQLite", async () => {
+  // Includes a 35-second watcher reconciliation allowance and native restarts.
+  test.setTimeout(120000);
   expect(
     existsSync(exe),
     "Build the native app first: npm run tauri build",

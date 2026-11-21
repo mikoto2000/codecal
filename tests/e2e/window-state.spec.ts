@@ -156,7 +156,11 @@ test("window state restores position size and maximization after normal restart"
     saveFixture({ ...saved, maximized: true });
     await launch();
     const maximized = await geometry();
-    expect(maximized.width).toBeGreaterThan(first.width);
+    const availableWidth = await page.evaluate(() =>
+      Math.round(screen.availWidth * devicePixelRatio),
+    );
+    // A maximized window can be narrower than a saved window on a small monitor.
+    expect(Math.abs(maximized.width - availableWidth)).toBeLessThanOrEqual(2);
     await closeNormally();
     expect(JSON.parse(readFileSync(stateFile, "utf-8")).main.maximized).toBe(
       true,
