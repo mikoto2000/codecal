@@ -83,6 +83,8 @@ node scripts/create-sample.mjs
 | `scripts/release.mjs`       | タグ・バージョン・成果物の検証                        |
 | `docs`                      | 設計、計算定義、ログ調査、検証結果                    |
 
+`src-tauri/gen/` のスキーマはTauriが生成するためGitでは追跡しません。初回は `cargo check --manifest-path src-tauri/Cargo.toml --locked` または `npm run tauri build` で生成できます。生成ファイルを直接編集せず、設定やcapabilitiesを変更して再生成してください。
+
 ## CIとリリース
 
 [通常CI](.github/workflows/ci.yml) はpushとpull requestで動きます。
