@@ -106,6 +106,15 @@ jobs:
           if (Test-Path $policy) {
             Remove-ItemProperty -Path $policy -Name 'codecal.exe' -ErrorAction SilentlyContinue
           }
+      - name: Upload native E2E diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
           name: CodeCal-windows-x64

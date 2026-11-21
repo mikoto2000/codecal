@@ -73,6 +73,13 @@ async function launch() {
     .toBeGreaterThan(0);
   page = browser.contexts().flatMap((c) => c.pages())[0];
   await page.waitForLoadState("domcontentloaded");
+  // Fixture times and labels use Japan time; CI runners usually use UTC.
+  await page.getByRole("button", { name: "設定", exact: true }).click();
+  await page.getByLabel("タイムゾーン", { exact: true }).fill("Asia/Tokyo");
+  await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+  await expect(
+    page.getByRole("dialog", { name: "設定", exact: true }),
+  ).not.toBeVisible();
 }
 async function stop() {
   if (process?.pid && process.exitCode === null) {
@@ -101,6 +108,8 @@ async function stop() {
   await browser?.close().catch(() => {});
 }
 test("native Tauri: import, calendars, detail, watch append and restart SQLite", async () => {
+  // Includes a 35-second watcher reconciliation allowance and native restarts.
+  test.setTimeout(120000);
   expect(
     existsSync(exe),
     "Build the native app first: npm run tauri build",
