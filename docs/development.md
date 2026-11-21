@@ -23,6 +23,8 @@ Windows 11 x64、Node 24、Rust MSVC stable、C++ Build ToolsとWindows SDK、We
 
 ローカルはConventional Commits。GitHub Actionsのwindows-latestで型、lint、format、Vitest、Rust fmt/clippy/test、Vite、TauriビルドとネイティブE2Eを実行する構成です。リモートリポジトリへのpushとホスト上でのCI実行は本作業では行いません。
 
+リリース補助処理のテストは `npm run test:release` で実行し、通常CIとリリースの両方で検証します。`v*` タグから6構成をビルドして公開する手順は [リリース](releasing.md) を参照してください。
+
 ## データの隔離
 
 CODEX_HOMEを合成ログディレクトリ、CODECAL_DATA_DIRを空の専用保存ディレクトリに指定すると、通常の履歴から独立してテストできます。実ログのプロンプト・ツール出力・DBはGitへ追加しません。.local/ と *.db はignore対象です。

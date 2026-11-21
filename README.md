@@ -51,6 +51,7 @@ npm run typecheck
 npm run lint
 npm run format:check
 npm test
+npm run test:release
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml --all-targets
@@ -77,5 +78,7 @@ E2EはWindowsの実行ファイルとWebView2に直接接続します。ビル�
 - まとめ表示は同じプロジェクト・同じ日・間隔5分以内を単位とし、元のターンは保持します。終了不明のターンは別のマーカーです。親の依頼とサブエージェントの対応による結合は未実装です。終了イベントしかないターンは開始時刻を推測して作成しません。
 - 夏時間の日は実経過時間に合わせて列内の時刻目盛りを個別表示します。通常日の共通時刻軸とは位置が異なります。
 - Windows x64で検証しています。Linux / macOSのネイティブ起動・パッケージと、クリーンな別端末でのインストールは未検証です。
+
+`v*` タグのpushでWindows・macOS・Linuxのx64 / ARM64向け成果物をGitHub Releaseに添付するワークフローを用意しています。手順と署名・検証範囲は [リリース](docs/releasing.md) を参照してください。
 
 設計と検証の詳細は [architecture](docs/architecture.md)、[ログ形式](docs/codex-log-format.md)、[稼働計算](docs/activity-calculation.md)、[DB](docs/database-schema.md)、[開発](docs/development.md)、[テスト](docs/testing.md) を参照してください。
