@@ -59,6 +59,7 @@ pub struct Snapshot {
 pub struct Progress {
     pub files: usize,
     pub bytes_read: u64,
+    pub warnings: Vec<String>,
 }
 pub struct Store {
     pub(crate) conn: Connection,
@@ -174,6 +175,7 @@ impl Store {
                 Progress {
                     files: 0,
                     bytes_read: 0,
+                    warnings: vec![format!("Codex: {e}")],
                 }
             }
         };
@@ -184,8 +186,12 @@ impl Store {
                     self.rei_diagnostic(root, None)?;
                     result.files += p.files;
                     result.bytes_read += p.bytes_read;
+                    result.warnings.extend(p.warnings);
                 }
-                Err(e) => self.rei_diagnostic(root, Some(&e))?,
+                Err(e) => {
+                    self.rei_diagnostic(root, Some(&e))?;
+                    result.warnings.push(format!("れい: {e}"));
+                }
             }
         }
         progress(result.files, result.files);
@@ -200,6 +206,7 @@ impl Store {
             return Err("ログディレクトリが見つかりません".into());
         }
         let mut files: Vec<PathBuf> = vec![];
+        let mut warnings = vec![];
         let roots: Vec<PathBuf> = ["sessions", "archived_sessions"]
             .iter()
             .map(|name| root.join(name))
@@ -222,6 +229,7 @@ impl Store {
                     files.push(e.into_path())
                 }
                 Err(e) => {
+                    warnings.push(format!("Codex: ディレクトリを読み取れません: {e}"));
                     self.conn
                         .execute(
                             "INSERT OR REPLACE INTO diagnostics VALUES(?,?)",
@@ -321,6 +329,7 @@ impl Store {
                 let d = match result {
                     Ok(d) => d,
                     Err(e) => {
+                        warnings.push(format!("Codex: {}: {e}", p.display()));
                         self.conn
                             .execute(
                                 "INSERT OR REPLACE INTO diagnostics VALUES(?,?)",
@@ -388,6 +397,7 @@ impl Store {
         Ok(Progress {
             files: total,
             bytes_read,
+            warnings,
         })
     }
     pub(crate) fn rebuild_if_dirty(&mut self) -> Result<(), String> {

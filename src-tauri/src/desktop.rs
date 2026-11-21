@@ -150,6 +150,11 @@ fn sync_app(app: &tauri::AppHandle) -> Result<Progress, String> {
     if result.is_ok() {
         let _ = app.emit("data-changed", ());
     }
+    if let Ok(p) = &result {
+        if !p.warnings.is_empty() {
+            let _ = app.emit("sync-error", p.warnings.join("\n"));
+        }
+    }
     result
 }
 #[tauri::command]
