@@ -71,3 +71,7 @@ describe("calendar math", () => {
     expect(heatLevel(2 * 3600000, [1, 3, 6])).toBe(2);
   });
 });
+
+it("returns only the selected date in a day view", () => {
+  expect(daysInView("2026-11-20", "day", 1)).toEqual(["2026-11-20"]);
+});

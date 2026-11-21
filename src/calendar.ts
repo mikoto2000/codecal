@@ -1,5 +1,6 @@
 import { DateTime } from "luxon";
 import type { Turn } from "./types";
+export type CalendarView = "day" | "week" | "month";
 export type Segment = {
   turn: Turn;
   date: string;
@@ -24,9 +25,10 @@ export const statusLabel = {
 };
 export function daysInView(
   anchor: string,
-  view: "week" | "month",
+  view: CalendarView,
   weekStart: number,
 ): string[] {
+  if (view === "day") return [anchor];
   const a = DateTime.fromISO(anchor, { zone: "UTC" });
   const base = view === "month" ? a.startOf("month") : a;
   const first = base.minus({ days: ((base.weekday % 7) - weekStart + 7) % 7 });

@@ -4,12 +4,14 @@ import {
   useMemo,
   useRef,
   useState,
+  useTransition,
   type ReactNode,
 } from "react";
 import { DateTime } from "luxon";
 import { api } from "./api";
 import {
   daysInView,
+  type CalendarView,
   formatDuration,
   heatLevel,
   localDate,
@@ -97,7 +99,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
     [draft, setDraft] = useState<Config | null>(null),
     [data, setData] = useState(empty),
     [dbPath, setDbPath] = useState("");
-  const [view, setView] = useState<"week" | "month">("week"),
+  const [view, setView] = useState<CalendarView>("week"),
     [anchor, setAnchor] = useState(initialDate ?? DateTime.now().toISODate()!),
     [hidden, setHidden] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true),
@@ -213,14 +215,44 @@ export default function App({ initialDate }: { initialDate?: string }) {
     () => new Map(data.projects.map((p) => [p.id, p])),
     [data.projects],
   );
-  const changeView = (v: "week" | "month") => {
-    setView(v);
+  const [isPending, startTransition] = useTransition();
+  const [preparingView, setPreparingView] = useState(false);
+  const viewFrame = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (viewFrame.current !== null) cancelAnimationFrame(viewFrame.current);
+    },
+    [],
+  );
+  const viewBusy = preparingView || isPending;
+  const navigate = (nextView: CalendarView, nextAnchor: string) => {
+    if (viewFrame.current !== null) cancelAnimationFrame(viewFrame.current);
     setSelectedDay(null);
+    setPreparingView(true);
+    // Give the busy indicator a painted frame before rendering the next calendar.
+    viewFrame.current = requestAnimationFrame(() => {
+      viewFrame.current = requestAnimationFrame(() => {
+        viewFrame.current = null;
+        startTransition(() => {
+          setView(nextView);
+          setAnchor(nextAnchor);
+          setPreparingView(false);
+        });
+      });
+    });
   };
+  const changeView = (v: CalendarView) => navigate(v, anchor);
   const move = (n: number) =>
-    setAnchor(
+    navigate(
+      view,
       DateTime.fromISO(anchor)
-        .plus(view === "week" ? { weeks: n } : { months: n })
+        .plus(
+          view === "day"
+            ? { days: n }
+            : view === "week"
+              ? { weeks: n }
+              : { months: n },
+        )
         .toISODate()!,
     );
   const openTurn = (t: Turn) => {
@@ -328,7 +360,14 @@ export default function App({ initialDate }: { initialDate?: string }) {
             >
               ↻ 同期
             </button>
-            <div className="view-switch">
+            <div className="view-switch" aria-label="カレンダーの表示期間">
+              <button
+                aria-pressed={view === "day"}
+                className={view === "day" ? "active" : ""}
+                onClick={() => changeView("day")}
+              >
+                日
+              </button>
               <button
                 aria-pressed={view === "week"}
                 className={view === "week" ? "active" : ""}
@@ -384,14 +423,30 @@ export default function App({ initialDate }: { initialDate?: string }) {
             <small>終了不明のターンも含む</small>
           </div>
         </section>
-        <main className="calendar-card">
+        <main className="calendar-card" aria-busy={viewBusy}>
+          {viewBusy && (
+            <div
+              className="view-loading"
+              role="status"
+              aria-label="カレンダーを切り替え中"
+            >
+              <span className="spinner" aria-hidden="true" />
+              <span>カレンダーを切り替え中…</span>
+            </div>
+          )}
           <div className="calendar-toolbar">
             <div className="period">
-              <h2>{DateTime.fromISO(anchor).toFormat("yyyy年 M月")}</h2>
+              <h2>
+                {DateTime.fromISO(anchor).toFormat(
+                  view === "day" ? "yyyy年 M月 d日" : "yyyy年 M月",
+                )}
+              </h2>
               <span>
                 {view === "week"
                   ? `${DateTime.fromISO(days[0]).toFormat("M/d")} – ${DateTime.fromISO(days[6]).toFormat("M/d")}`
-                  : "MONTHLY ACTIVITY"}
+                  : view === "day"
+                    ? "DAILY ACTIVITY"
+                    : "MONTHLY ACTIVITY"}
               </span>
             </div>
             <div className="date-controls">
@@ -403,19 +458,22 @@ export default function App({ initialDate }: { initialDate?: string }) {
               </button>
               <button
                 onClick={() =>
-                  setAnchor(localDate(Date.now(), zone).toISODate()!)
+                  navigate(view, localDate(Date.now(), zone).toISODate()!)
                 }
               >
-                {view === "week" ? "今週" : "今月"}
+                {view === "day" ? "今日" : view === "week" ? "今週" : "今月"}
               </button>
               <input
                 aria-label="表示日"
-                type={view === "week" ? "date" : "month"}
-                value={view === "week" ? anchor : anchor.slice(0, 7)}
+                type={view !== "month" ? "date" : "month"}
+                value={view !== "month" ? anchor : anchor.slice(0, 7)}
                 onChange={(e) => {
                   if (e.target.value)
-                    setAnchor(
-                      view === "week" ? e.target.value : e.target.value + "-01",
+                    navigate(
+                      view,
+                      view !== "month"
+                        ? e.target.value
+                        : e.target.value + "-01",
                     );
                 }}
               />
@@ -424,9 +482,14 @@ export default function App({ initialDate }: { initialDate?: string }) {
           {!loading && summary.count === 0 && (
             <p className="empty-state">表示期間の稼働はありません</p>
           )}
-          {view === "week" ? (
+          {view !== "month" ? (
             <>
-              <div className="week-head">
+              <div
+                className="week-head"
+                style={{
+                  gridTemplateColumns: `60px repeat(${days.length}, minmax(0,1fr))`,
+                }}
+              >
                 <div className="zone-caption" title={zone}>
                   {zone.split("/").at(-1)}
                 </div>
@@ -445,7 +508,12 @@ export default function App({ initialDate }: { initialDate?: string }) {
                 ))}
               </div>
               <div className="week-scroll">
-                <div className="week-grid">
+                <div
+                  className="week-grid"
+                  style={{
+                    gridTemplateColumns: `60px repeat(${days.length}, minmax(0,1fr))`,
+                  }}
+                >
                   <div className="time-axis">
                     {Array.from({ length: 25 }, (_, h) => (
                       <span key={h} style={{ top: h * 60 }}>
@@ -696,12 +764,16 @@ export default function App({ initialDate }: { initialDate?: string }) {
           <button
             className="primary"
             onClick={() => {
-              setAnchor(selectedDay);
-              setView("week");
-              setSelectedDay(null);
+              navigate("week", selectedDay);
             }}
           >
             週表示で開く
+          </button>
+          <button
+            className="primary"
+            onClick={() => navigate("day", selectedDay)}
+          >
+            1日表示で開く
           </button>
         </Modal>
       )}
