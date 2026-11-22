@@ -168,3 +168,31 @@ fn backs_up_committed_wal_records_and_preserves_zero_version_legacy_database() {
     assert_eq!(version(&path), 3);
     drop(c);
 }
+#[test]
+fn preserves_explicit_legacy_claude_turn_boundaries_after_migration() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("legacy.db");
+    drop(Store::open(&path).unwrap());
+    let c = Connection::open(&path).unwrap();
+    for (id, turn, kind, time) in [
+        ("a", "one", "start", 0),
+        ("b", "one", "completed", 60000),
+        ("c", "two", "start", 120000),
+        ("d", "two", "completed", 180000),
+    ] {
+        let event = serde_json::json!({"source":"claude","timestamp":time,"kind":kind,"session_id":"claude:legacy","turn_id":turn,"cwd":"/synthetic","text":"legacy task","tokens":null});
+        c.execute(
+            "INSERT INTO events VALUES(?,?,?,?)",
+            rusqlite::params![id, "claude:legacy", time, event.to_string()],
+        )
+        .unwrap();
+    }
+    c.execute("INSERT INTO settings VALUES('_activity_dirty','1')", [])
+        .unwrap();
+    drop(c);
+    let s = Store::open(&path).unwrap();
+    let a = s.snapshot("UTC").unwrap();
+    assert_eq!(a.turns.len(), 2);
+    assert_eq!(a.turns[0].end, Some(60000));
+    assert_eq!(a.days[0].elapsed_ms, 120000);
+}
