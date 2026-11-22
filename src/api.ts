@@ -20,6 +20,8 @@ export const api = {
     progress: (s: string) => void,
     error: (s: string) => void,
     startup: (phase: "migrating") => void = () => {},
+    warning: (messages: string[]) => void = () => {},
+    watchWarning: (message: string) => void = () => {},
   ) => {
     const offs = await Promise.all([
       listen("data-changed", changed),
@@ -28,6 +30,8 @@ export const api = {
       ),
       listen<string>("sync-error", (e) => error(e.payload)),
       listen<"migrating">("startup-progress", (e) => startup(e.payload)),
+      listen<string[]>("sync-warning", (e) => warning(e.payload)),
+      listen<string>("watch-warning", (e) => watchWarning(e.payload)),
     ]);
     return () => offs.forEach((off) => off());
   },

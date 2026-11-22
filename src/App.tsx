@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -51,22 +52,29 @@ function Modal({
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
   useEffect(() => {
+    const trigger = document.activeElement;
     const d = ref.current;
     if (d?.showModal) d.showModal();
     else d?.setAttribute("open", "");
+    return () => {
+      if (d?.open && d.close) d.close();
+      if (trigger instanceof HTMLElement && trigger.isConnected)
+        trigger.focus();
+    };
   }, []);
   return (
     <dialog
       ref={ref}
-      aria-label={title}
+      aria-labelledby={titleId}
       onCancel={(e) => {
         e.preventDefault();
         close();
       }}
     >
       <div className="modal-heading">
-        <h2>{title}</h2>
+        <h2 id={titleId}>{title}</h2>
         <button onClick={close} aria-label="閉じる">
           ×
         </button>
@@ -84,8 +92,19 @@ function ProjectEditor({
   changed: () => void;
   error: (s: string) => void;
 }) {
-  const [name, setName] = useState(project.name),
-    [color, setColor] = useState(project.color);
+  const [nameEdit, setName] = useState<{ base: string; value: string } | null>(
+      null,
+    ),
+    [colorEdit, setColor] = useState<{ base: string; value: string } | null>(
+      null,
+    );
+  // Discard only a draft whose own saved field changed; ordinary reloads and
+  // updates to the other field must leave in-progress edits intact.
+  if (nameEdit && nameEdit.base !== project.name) setName(null);
+  if (colorEdit && colorEdit.base !== project.color) setColor(null);
+  const name = nameEdit?.base === project.name ? nameEdit.value : project.name;
+  const color =
+    colorEdit?.base === project.color ? colorEdit.value : project.color;
   return (
     <form
       className="project-editor"
@@ -101,13 +120,15 @@ function ProjectEditor({
         aria-label={`${project.name} の表示名`}
         value={name}
         maxLength={120}
-        onChange={(e) => setName(e.target.value)}
+        onChange={(e) => setName({ base: project.name, value: e.target.value })}
       />
       <input
         aria-label={`${project.name} の色`}
         type="color"
         value={color}
-        onChange={(e) => setColor(e.target.value)}
+        onChange={(e) =>
+          setColor({ base: project.color, value: e.target.value })
+        }
       />
       <button>更新</button>
     </form>
@@ -143,6 +164,8 @@ export default function App({ initialDate }: { initialDate?: string }) {
   const [copyStatus, setCopyStatus] = useState("");
   const [copyFailed, setCopyFailed] = useState(false);
   const [bootNotices, setBootNotices] = useState<string[]>([]);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [watchWarning, setWatchWarning] = useState("");
   const timezoneChoices = useMemo(() => {
     try {
       return ["UTC", ...Intl.supportedValuesOf("timeZone")];
@@ -177,7 +200,8 @@ export default function App({ initialDate }: { initialDate?: string }) {
       setProgress(
         `${result.files} ファイル確認 · ${Math.round(result.bytes_read / 1024)} KB 読み込み`,
       );
-      setError(result.warnings.join("\n"));
+      setWarnings(result.warnings);
+      setError("");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -202,6 +226,12 @@ export default function App({ initialDate }: { initialDate?: string }) {
           },
           (phase) => {
             if (alive) setStartupPhase(phase);
+          },
+          (messages) => {
+            if (alive) setWarnings(messages);
+          },
+          (message) => {
+            if (alive) setWatchWarning(message);
           },
         );
         if (!alive) {
@@ -438,10 +468,10 @@ export default function App({ initialDate }: { initialDate?: string }) {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <a className="brand" href="#">
+        <div className="brand">
           <span className="brand-icon">▦</span>CodeCal
-          <span className="version">LOCAL</span>
-        </a>
+          <span className="version">v{__APP_VERSION__}</span>
+        </div>
         <p className="eyebrow">YOUR WORK RHYTHM</p>
         <p className="sidebar-intro">
           作業の時間を、
@@ -507,7 +537,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
                 ? "読み込み中"
                 : syncing
                   ? "同期中"
-                  : error
+                  : error || warnings.length > 0 || watchWarning
                     ? "要確認"
                     : "同期済み"}
             </span>
@@ -547,7 +577,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
             {bootNotices.map((message) => (
               <p key={message}>{message}</p>
             ))}
-            <button onClick={openSettings}>タイムゾーンを確認</button>
+            <button onClick={openSettings}>設定を確認</button>
           </div>
         )}
         {firstRun && config && (
@@ -575,6 +605,37 @@ export default function App({ initialDate }: { initialDate?: string }) {
             )}
             <button onClick={openSettings}>初期設定を確認</button>
             <button onClick={() => setFirstRun(false)}>案内を閉じる</button>
+          </section>
+        )}
+        {(warnings.length > 0 || watchWarning) && (
+          <section
+            role="status"
+            className="warning-banner"
+            aria-label="同期の警告"
+          >
+            <div>
+              <strong>取り込みの一部に確認が必要です</strong>
+              <ul>
+                {[
+                  ...new Set([
+                    ...warnings,
+                    ...(watchWarning ? [watchWarning] : []),
+                  ]),
+                ].map((message) => (
+                  <li key={message}>{message}</li>
+                ))}
+              </ul>
+            </div>
+            <button onClick={openDiagnostics}>診断を見る</button>
+            <button
+              aria-label="警告を閉じる"
+              onClick={() => {
+                setWarnings([]);
+                setWatchWarning("");
+              }}
+            >
+              ×
+            </button>
           </section>
         )}
         {error && (
@@ -1126,7 +1187,14 @@ export default function App({ initialDate }: { initialDate?: string }) {
           >
             ログの該当箇所を表示
           </button>
-          {excerpt && <pre className="log-excerpt">{excerpt}</pre>}
+          {excerpt && (
+            <>
+              <p className="hint">
+                ログ抜粋には依頼文やローカルのパスなどの機密情報が含まれ得ます。共有前に内容を確認してください。
+              </p>
+              <pre className="log-excerpt">{excerpt}</pre>
+            </>
+          )}
         </Modal>
       )}
       {selectedDay && daySummary && (
@@ -1268,6 +1336,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
               <input
                 value={draft.timezone}
                 placeholder="Asia/Tokyo"
+                title="候補にないIANAタイムゾーン名も直接入力できます"
                 list="timezone-choices"
                 aria-describedby="timezone-preview"
                 onChange={(e) =>

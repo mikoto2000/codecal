@@ -1,4 +1,38 @@
 use codecal_lib::activity::{aggregate, Interval};
+#[test]
+fn matches_shared_calendar_fixtures() {
+    let cases: serde_json::Value =
+        serde_json::from_str(include_str!("../../tests/fixtures/activity.json")).unwrap();
+    for case in cases.as_array().unwrap() {
+        let intervals: Vec<_> = case["intervals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| Interval {
+                project_id: item["project_id"].as_str().unwrap().into(),
+                start: t(item["start"].as_str().unwrap()),
+                end: item["end"].as_str().map(t),
+            })
+            .collect();
+        let actual = aggregate(&intervals, case["timezone"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_value(actual).unwrap(),
+            case["days"],
+            "{}",
+            case["name"]
+        );
+    }
+    assert!(aggregate(
+        &[Interval {
+            project_id: "p".into(),
+            start: 1,
+            end: Some(0)
+        }],
+        "UTC"
+    )
+    .unwrap()
+    .is_empty());
+}
 fn t(s: &str) -> i64 {
     chrono::DateTime::parse_from_rfc3339(s)
         .unwrap()

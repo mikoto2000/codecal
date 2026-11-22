@@ -14,8 +14,10 @@ export type Segment = {
 };
 export const localDate = (ms: number, zone: string) =>
   DateTime.fromMillis(ms, { zone });
-export const formatDuration = (ms: number) =>
-  `${Math.floor(ms / 3600000)}h ${Math.floor((ms % 3600000) / 60000)}m`;
+export const formatDuration = (ms: number) => {
+  const safe = Number.isFinite(ms) ? Math.max(0, ms) : 0;
+  return `${Math.floor(safe / 3600000)}h ${Math.floor((safe % 3600000) / 60000)}m`;
+};
 export const statusLabel = {
   completed: "完了",
   failed: "失敗",

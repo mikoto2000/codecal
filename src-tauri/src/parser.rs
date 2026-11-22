@@ -7,6 +7,8 @@ pub struct SessionDetails {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub text_truncated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details: Option<SessionDetails>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -24,6 +26,9 @@ pub struct Event {
     pub cwd: Option<String>,
     pub text: Option<String>,
     pub tokens: Option<i64>,
+}
+fn is_false(value: &bool) -> bool {
+    !value
 }
 fn text_content(v: &Value) -> Option<String> {
     v.as_array()
@@ -78,6 +83,7 @@ pub fn parse_line(line: &str) -> Result<Option<Event>, String> {
         None
     };
     Ok(Some(Event {
+        text_truncated: text.as_ref().is_some_and(|s| s.chars().count() > 16384),
         details: None,
         source: None,
         project_name: None,

@@ -66,6 +66,37 @@ fn upgrades_v2_automatically_with_a_consistent_backup_and_idempotent_reopen() {
     assert_eq!(std::fs::read(&backup).unwrap(), before);
 }
 #[test]
+fn retries_keep_older_backups_and_capture_the_latest_pre_migration_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("retry.db");
+    drop(Store::open(&path).unwrap());
+    let original = tmp.path().join("retry.db.before-v3.bak");
+    std::fs::write(&original, b"original backup").unwrap();
+    for sequence in 1..=2 {
+        let c = Connection::open(&path).unwrap();
+        c.execute_batch("PRAGMA user_version=2;").unwrap();
+        c.execute(
+            "INSERT OR REPLACE INTO settings VALUES('keep',?)",
+            [format!("state-{sequence}")],
+        )
+        .unwrap();
+        drop(c);
+        drop(Store::open(&path).unwrap());
+        let backup_path = tmp
+            .path()
+            .join(format!("retry.db.before-v3.bak.{sequence}"));
+        assert_eq!(version(&backup_path), 2);
+        let backup = Connection::open(backup_path).unwrap();
+        let value: String = backup
+            .query_row("SELECT value FROM settings WHERE key='keep'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(value, format!("state-{sequence}"));
+        assert_eq!(std::fs::read(&original).unwrap(), b"original backup");
+    }
+}
+#[test]
 fn old_version_marker_with_already_added_columns_does_not_fail_duplicate_column() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("old.db");

@@ -79,6 +79,81 @@ const mount = async () => {
   render(<App initialDate="2026-11-20" />);
   await screen.findByRole("button", { name: /Sample project.*10:00/ });
 };
+it("returns focus to the settings trigger and associates the visible dialog title", async () => {
+  await mount();
+  const trigger = screen.getByRole("button", { name: "設定" });
+  trigger.focus();
+  fireEvent.click(trigger);
+  const dialog = screen.getByRole("dialog", { name: "設定" });
+  expect(dialog).toHaveAttribute(
+    "aria-labelledby",
+    within(dialog).getByRole("heading", { name: "設定" }).id,
+  );
+  fireEvent.click(within(dialog).getByRole("button", { name: "閉じる" }));
+  expect(trigger).toHaveFocus();
+});
+it("keeps project drafts on ordinary reloads and reflects externally changed fields", async () => {
+  await mount();
+  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  fireEvent.change(screen.getByLabelText("Sample project の表示名"), {
+    target: { value: "My draft" },
+  });
+  const events = vi.mocked(api.events).mock.calls.at(-1)!;
+  await act(async () => {
+    events[0]();
+  });
+  expect(screen.getByLabelText("Sample project の表示名")).toHaveValue(
+    "My draft",
+  );
+  vi.mocked(api.snapshot).mockResolvedValue({
+    ...data,
+    projects: [{ ...data.projects[0], color: "#ffffff" }],
+  });
+  await act(async () => {
+    events[0]();
+  });
+  expect(screen.getByLabelText("Sample project の表示名")).toHaveValue(
+    "My draft",
+  );
+  expect(screen.getByLabelText("Sample project の色")).toHaveValue("#ffffff");
+  vi.mocked(api.snapshot).mockResolvedValue({
+    ...data,
+    projects: [{ ...data.projects[0], name: "External name" }],
+  });
+  await act(async () => {
+    events[0]();
+  });
+  expect(screen.getByLabelText("External name の表示名")).toHaveValue(
+    "External name",
+  );
+  vi.mocked(api.snapshot).mockResolvedValue(data);
+  await act(async () => {
+    events[0]();
+  });
+  expect(screen.getByLabelText("Sample project の表示名")).toHaveValue(
+    "Sample project",
+  );
+});
+it("keeps background warnings separate from failures and clears resolved warnings", async () => {
+  await mount();
+  const events = vi.mocked(api.events).mock.calls.at(-1)!;
+  await act(async () => {
+    events[4]?.(["一部のログを読み飛ばしました"]);
+    events[5]?.("監視を開始できません");
+  });
+  const warning = screen.getByRole("status", { name: "同期の警告" });
+  expect(warning).toHaveTextContent("一部のログを読み飛ばしました");
+  expect(warning).toHaveTextContent("監視を開始できません");
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  await act(async () => {
+    events[2]("同期に失敗しました");
+    events[4]?.([]);
+  });
+  expect(screen.getByRole("alert")).toHaveTextContent("同期に失敗しました");
+  expect(
+    screen.getByRole("status", { name: "同期の警告" }),
+  ).not.toHaveTextContent("一部のログを読み飛ばしました");
+});
 it("offers detected settings on first launch without blocking the calendar", async () => {
   const boot = await api.boot();
   vi.mocked(api.boot).mockResolvedValue({ ...boot, first_run: true });
@@ -142,7 +217,7 @@ it("keeps a timezone fallback notice visible and links to settings", async () =>
   });
   await mount();
   expect(screen.getByText(/認識できなかったため UTC/)).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "タイムゾーンを確認" }));
+  fireEvent.click(screen.getByRole("button", { name: "設定を確認" }));
   expect(screen.getByRole("dialog", { name: "設定" })).toBeInTheDocument();
 });
 it("opens turn detail and reads local source only on request", async () => {
@@ -248,16 +323,18 @@ it("shows partial import failures and clears them after a successful retry", asy
     diagnostics: ["過去の診断"],
   });
   await mount();
-  expect(await screen.findByRole("alert")).toHaveTextContent(
-    "Codex: ログディレクトリが見つかりません",
-  );
+  expect(
+    await screen.findByRole("status", { name: "同期の警告" }),
+  ).toHaveTextContent("Codex: ログディレクトリが見つかりません");
   expect(screen.getByText("要確認")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "診断を見る" }));
   expect(screen.getByRole("dialog")).toHaveTextContent("過去の診断");
   fireEvent.click(screen.getByRole("button", { name: "閉じる" }));
   fireEvent.click(screen.getByRole("button", { name: /同期/ }));
   await waitFor(() =>
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+    expect(
+      screen.queryByRole("status", { name: "同期の警告" }),
+    ).not.toBeInTheDocument(),
   );
   expect(screen.getByText("同期済み")).toBeInTheDocument();
 });

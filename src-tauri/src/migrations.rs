@@ -59,28 +59,37 @@ fn backup(conn: &Connection, path: &Path) -> Result<(), String> {
         .ok_or("DBのファイル名が不正です")?
         .to_os_string();
     name.push(".before-v3.bak");
-    let target = path.with_file_name(name);
-    if target.exists() {
-        if target.is_file() {
-            return Ok(());
-        }
-        return Err("DB移行前のバックアップ先がファイルではありません".into());
-    }
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    let temporary = tempfile::NamedTempFile::new_in(parent).map_err(err)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(err)?;
     conn.backup(MAIN_DB, temporary.path(), None)
         .map_err(|e| format!("DB移行前のバックアップに失敗しました: {e}"))?;
-    match temporary.persist_noclobber(target) {
-        Ok(_) => Ok(()),
-        Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-        Err(e) => Err(format!(
-            "DB移行前のバックアップを保存できません: {}",
-            e.error
-        )),
+    for sequence in 0_u64.. {
+        let mut candidate = name.clone();
+        if sequence > 0 {
+            candidate.push(format!(".{sequence}"));
+        }
+        let target = path.with_file_name(candidate);
+        if target.exists() {
+            if !target.is_file() {
+                return Err("DB移行前のバックアップ先がファイルではありません".into());
+            }
+            continue;
+        }
+        match temporary.persist_noclobber(target) {
+            Ok(_) => return Ok(()),
+            Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => temporary = e.file,
+            Err(e) => {
+                return Err(format!(
+                    "DB移行前のバックアップを保存できません: {}",
+                    e.error
+                ))
+            }
+        }
     }
+    Err("DB移行前のバックアップ名を確保できません".into())
 }
 
 pub(crate) fn migrate(

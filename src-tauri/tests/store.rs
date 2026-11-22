@@ -1,5 +1,54 @@
 use codecal_lib::store::Store;
 use std::fs;
+#[test]
+fn failed_setting_recovery_keeps_original_without_a_partial_backup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("test.db");
+    let store = Store::open(&path).unwrap();
+    store.set_setting("config", "{broken").unwrap();
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_reset BEFORE UPDATE ON settings WHEN OLD.key='config' BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;").unwrap();
+    assert!(store.reset_setting_with_backup("config", "{}").is_err());
+    assert_eq!(
+        store.get_setting("config").unwrap().as_deref(),
+        Some("{broken")
+    );
+    let backups: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM settings WHERE key GLOB '_config_backup_*'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(backups, 0);
+}
+#[test]
+fn display_snapshot_omits_unused_daily_totals_and_truncated_prompts_are_diagnosed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("logs");
+    fs::create_dir(&root).unwrap();
+    let long_prompt = "依".repeat(16385);
+    fs::write(
+        root.join("a.jsonl"),
+        fixture().replace("合成サンプルの作業", &long_prompt),
+    )
+    .unwrap();
+    let mut store = Store::open(&tmp.path().join("test.db")).unwrap();
+    store.sync(&root).unwrap();
+    let calendar = store.snapshot_for_display().unwrap();
+    assert_eq!(calendar.turns[0].prompt.chars().count(), 16384);
+    assert!(calendar
+        .diagnostics
+        .iter()
+        .any(|d| d.contains("16,384文字")));
+    assert!(!serde_json::to_value(&calendar)
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .contains_key("days"));
+    assert_eq!(store.snapshot("UTC").unwrap().days[0].total_ms, 3600000);
+    assert!(!calendar.diagnostics.join("\n").contains(&long_prompt));
+}
 fn fixture() -> String {
     [
  r#"{"timestamp":"2026-11-20T10:00:00Z","type":"session_meta","payload":{"id":"s1","cwd":"C:\\work\\demo"}}"#,

@@ -1,0 +1,141 @@
+[
+  {
+    "name": "overlap",
+    "timezone": "UTC",
+    "intervals": [
+      {
+        "project_id": "p",
+        "start": "2026-11-20T10:00:00Z",
+        "end": "2026-11-20T12:00:00Z"
+      },
+      {
+        "project_id": "q",
+        "start": "2026-11-20T11:00:00Z",
+        "end": "2026-11-20T13:00:00Z"
+      }
+    ],
+    "days": [
+      {
+        "date": "2026-11-20",
+        "elapsed_ms": 10800000,
+        "total_ms": 14400000,
+        "projects": {
+          "p": 7200000,
+          "q": 7200000
+        }
+      }
+    ]
+  },
+  {
+    "name": "Tokyo midnight",
+    "timezone": "Asia/Tokyo",
+    "intervals": [
+      {
+        "project_id": "p",
+        "start": "2026-11-20T14:00:00Z",
+        "end": "2026-11-20T17:00:00Z"
+      }
+    ],
+    "days": [
+      {
+        "date": "2026-11-20",
+        "elapsed_ms": 3600000,
+        "total_ms": 3600000,
+        "projects": {
+          "p": 3600000
+        }
+      },
+      {
+        "date": "2026-11-21",
+        "elapsed_ms": 7200000,
+        "total_ms": 7200000,
+        "projects": {
+          "p": 7200000
+        }
+      }
+    ]
+  },
+  {
+    "name": "spring DST",
+    "timezone": "America/New_York",
+    "intervals": [
+      {
+        "project_id": "p",
+        "start": "2026-03-08T05:00:00Z",
+        "end": "2026-03-09T04:00:00Z"
+      }
+    ],
+    "days": [
+      {
+        "date": "2026-03-08",
+        "elapsed_ms": 82800000,
+        "total_ms": 82800000,
+        "projects": {
+          "p": 82800000
+        }
+      }
+    ]
+  },
+  {
+    "name": "autumn DST",
+    "timezone": "America/New_York",
+    "intervals": [
+      {
+        "project_id": "p",
+        "start": "2026-11-01T04:00:00Z",
+        "end": "2026-11-02T05:00:00Z"
+      }
+    ],
+    "days": [
+      {
+        "date": "2026-11-01",
+        "elapsed_ms": 90000000,
+        "total_ms": 90000000,
+        "projects": {
+          "p": 90000000
+        }
+      }
+    ]
+  },
+  {
+    "name": "skipped date",
+    "timezone": "Pacific/Apia",
+    "intervals": [
+      {
+        "project_id": "p",
+        "start": "2011-12-29T22:00:00Z",
+        "end": "2011-12-30T12:00:00Z"
+      }
+    ],
+    "days": [
+      {
+        "date": "2011-12-29",
+        "elapsed_ms": 43200000,
+        "total_ms": 43200000,
+        "projects": {
+          "p": 43200000
+        }
+      },
+      {
+        "date": "2011-12-31",
+        "elapsed_ms": 7200000,
+        "total_ms": 7200000,
+        "projects": {
+          "p": 7200000
+        }
+      }
+    ]
+  },
+  {
+    "name": "unknown end",
+    "timezone": "UTC",
+    "intervals": [
+      {
+        "project_id": "p",
+        "start": "2026-11-20T10:00:00Z",
+        "end": null
+      }
+    ],
+    "days": []
+  }
+]

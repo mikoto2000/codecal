@@ -53,6 +53,7 @@ pub struct Turn {
 pub struct Snapshot {
     pub projects: Vec<Project>,
     pub turns: Vec<Turn>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub days: Vec<Day>,
     pub diagnostics: Vec<String>,
     pub diagnostics_total: i64,
@@ -111,6 +112,43 @@ impl Store {
         self.conn.execute("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![key,value]).map_err(err)?;
         Ok(())
     }
+    /// Preserve the original value and replace it atomically, including on retry.
+    pub fn reset_setting_with_backup(&self, key: &str, value: &str) -> Result<String, String> {
+        let tx = self.conn.unchecked_transaction().map_err(err)?;
+        let original: String = tx
+            .query_row("SELECT value FROM settings WHERE key=?", [key], |r| {
+                r.get(0)
+            })
+            .map_err(err)?;
+        let prefix = format!("_{key}_backup_{}", chrono::Utc::now().timestamp_millis());
+        let mut sequence = 0_u64;
+        let backup_key = loop {
+            let candidate = format!("{prefix}_{sequence}");
+            let exists: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM settings WHERE key=?)",
+                    [&candidate],
+                    |r| r.get(0),
+                )
+                .map_err(err)?;
+            if !exists {
+                break candidate;
+            }
+            sequence += 1;
+        };
+        tx.execute(
+            "INSERT INTO settings VALUES(?,?)",
+            params![backup_key, original],
+        )
+        .map_err(err)?;
+        tx.execute(
+            "UPDATE settings SET value=? WHERE key=?",
+            params![value, key],
+        )
+        .map_err(err)?;
+        tx.commit().map_err(err)?;
+        Ok(backup_key)
+    }
     pub fn update_project(&self, id: &str, name: &str, color: &str) -> Result<(), String> {
         if name.trim().is_empty()
             || name.chars().count() > 120
@@ -139,11 +177,11 @@ impl Store {
     ) -> Result<Progress, String> {
         let mut result = match self.sync_progress(codex, &progress) {
             Ok(p) => {
-                self.rei_diagnostic(codex, None)?;
+                self.source_diagnostic(codex, None)?;
                 p
             }
             Err(e) => {
-                self.rei_diagnostic(codex, Some(&e))?;
+                self.source_diagnostic(codex, Some(&e))?;
                 Progress {
                     files: 0,
                     bytes_read: 0,
@@ -155,13 +193,13 @@ impl Store {
             progress(0, 1);
             match self.sync_rei(root) {
                 Ok(p) => {
-                    self.rei_diagnostic(root, None)?;
+                    self.source_diagnostic(root, None)?;
                     result.files += p.files;
                     result.bytes_read += p.bytes_read;
                     result.warnings.extend(p.warnings);
                 }
                 Err(e) => {
-                    self.rei_diagnostic(root, Some(&e))?;
+                    self.source_diagnostic(root, Some(&e))?;
                     result.warnings.push(format!("れい: {e}"));
                 }
             }
@@ -178,15 +216,15 @@ impl Store {
     ) -> Result<Progress, String> {
         let mut result = self.sync_sources(codex, rei, &progress)?;
         if let Some(root) = claude {
-            match self.sync_claude(root) {
+            match self.sync_claude_progress(root, &progress) {
                 Ok(p) => {
                     result.files += p.files;
                     result.bytes_read += p.bytes_read;
-                    self.rei_diagnostic(root, if p.warnings.is_empty() { None } else { Some("Claude Code: transcript discovery warnings; check selected projects directory") })?;
+                    self.source_diagnostic(root, if p.warnings.is_empty() { None } else { Some("Claude Code: ログの探索中に警告がありました。指定した projects ディレクトリを確認してください") })?;
                     result.warnings.extend(p.warnings);
                 }
                 Err(e) => {
-                    self.rei_diagnostic(root, Some(&e))?;
+                    self.source_diagnostic(root, Some(&e))?;
                     result.warnings.push(format!("Claude Code: {e}"));
                 }
             }
@@ -245,8 +283,15 @@ impl Store {
         self.sync_files(files, warnings, progress, false)
     }
     pub fn sync_claude(&mut self, root: &Path) -> Result<Progress, String> {
+        self.sync_claude_progress(root, |_, _| {})
+    }
+    pub fn sync_claude_progress(
+        &mut self,
+        root: &Path,
+        progress: impl Fn(usize, usize),
+    ) -> Result<Progress, String> {
         let (files, warnings) = crate::claude::discover(root)?;
-        self.sync_files(files, warnings, |_, _| {}, true)
+        self.sync_files(files, warnings, progress, true)
     }
     fn sync_files(
         &mut self,
@@ -557,6 +602,13 @@ impl Store {
         Ok(())
     }
     pub fn snapshot(&self, timezone: &str) -> Result<Snapshot, String> {
+        self.read_snapshot(Some(timezone))
+    }
+    /// Calendars compute filtered daily totals in the frontend.
+    pub fn snapshot_for_display(&self) -> Result<Snapshot, String> {
+        self.read_snapshot(None)
+    }
+    fn read_snapshot(&self, timezone: Option<&str>) -> Result<Snapshot, String> {
         let mut q=self.conn.prepare("SELECT id,cwd,name,color FROM projects WHERE EXISTS(SELECT 1 FROM turns WHERE project_id=projects.id) ORDER BY name").map_err(err)?;
         let projects = q
             .query_map([], |r| {
@@ -570,19 +622,48 @@ impl Store {
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
-        let mut q=self.conn.prepare("SELECT id,session_id,turn_id,project_id,start,end,status,prompt,tokens,source,native_session_id,native_turn_id,CASE WHEN source='claude' THEN (SELECT json_extract(event,'$.details') FROM events e WHERE e.session_id=turns.session_id AND json_extract(event,'$.turn_id')=turns.turn_id LIMIT 1) ELSE NULL END FROM turns ORDER BY start").map_err(err)?;
+        // Scan each relevant session once instead of rescanning its events for every turn.
+        // Keep the first event in timestamp order, matching the former LIMIT 1 lookup.
+        let mut metadata = self.conn.prepare("SELECT e.session_id,json_extract(e.event,'$.turn_id'),json_extract(e.event,'$.details') FROM (SELECT DISTINCT session_id FROM turns WHERE source='claude') c JOIN events e ON e.session_id=c.session_id ORDER BY e.session_id,e.ts").map_err(err)?;
+        let mut details: BTreeMap<(String, String), Option<crate::parser::SessionDetails>> =
+            BTreeMap::new();
+        for row in metadata
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })
+            .map_err(err)?
+        {
+            let (session, turn, value) = row.map_err(err)?;
+            if let Some(turn) = turn {
+                details
+                    .entry((session, turn))
+                    .or_insert_with(|| value.and_then(|s| serde_json::from_str(&s).ok()));
+            }
+        }
+        let mut q=self.conn.prepare("SELECT id,session_id,turn_id,project_id,start,end,status,prompt,tokens,source,native_session_id,native_turn_id FROM turns ORDER BY start").map_err(err)?;
         let turns = q
             .query_map([], |r| {
+                let session_id: String = r.get(1)?;
+                let turn_id: String = r.get(2)?;
+                let source: String = r.get(9)?;
                 Ok(Turn {
-                    details: r
-                        .get::<_, Option<String>>(12)?
-                        .and_then(|s| serde_json::from_str(&s).ok()),
-                    source: r.get(9)?,
+                    details: if source == "claude" {
+                        details
+                            .remove(&(session_id.clone(), turn_id.clone()))
+                            .flatten()
+                    } else {
+                        None
+                    },
+                    source,
                     native_session_id: r.get(10)?,
                     native_turn_id: r.get(11)?,
                     id: r.get(0)?,
-                    session_id: r.get(1)?,
-                    turn_id: r.get(2)?,
+                    session_id,
+                    turn_id,
                     project_id: r.get(3)?,
                     start: r.get(4)?,
                     end: r.get(5)?,
@@ -594,15 +675,19 @@ impl Store {
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
-        let intervals = turns
-            .iter()
-            .map(|t| Interval {
-                project_id: t.project_id.clone(),
-                start: t.start,
-                end: t.end,
-            })
-            .collect::<Vec<_>>();
-        let days = aggregate(&intervals, timezone)?;
+        let days = if let Some(timezone) = timezone {
+            let intervals = turns
+                .iter()
+                .map(|t| Interval {
+                    project_id: t.project_id.clone(),
+                    start: t.start,
+                    end: t.end,
+                })
+                .collect::<Vec<_>>();
+            aggregate(&intervals, timezone)?
+        } else {
+            vec![]
+        };
         let diagnostics_total = self
             .conn
             .query_row("SELECT COUNT(*) FROM diagnostics", [], |r| r.get(0))
@@ -778,6 +863,9 @@ fn read_delta(path: &Path, previous: Option<&Cursor>, claude: bool) -> Result<De
                 }
             }) {
             Ok(Some(e)) => {
+                if e.text_truncated && diagnostics.len() < 20 {
+                    diagnostics.push(format!("line {line}, byte {before}: 依頼文は16,384文字まで保存しました（以降を省略）"));
+                }
                 if let Some(s) = &e.session_id {
                     session = s.clone();
                 }

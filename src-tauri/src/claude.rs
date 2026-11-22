@@ -37,14 +37,14 @@ pub fn session_key(path: &Path) -> Result<(String, String, Option<String>), Stri
         .components()
         .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
     {
-        return Err("invalid transcript path".into());
+        return Err("不正なログパスです".into());
     }
     let stem = path
         .file_stem()
         .and_then(|s| s.to_str())
-        .ok_or("invalid session id")?;
+        .ok_or("セッションIDが不正です")?;
     if path.extension().is_none_or(|s| s != "jsonl") {
-        return Err("invalid transcript suffix".into());
+        return Err("ログの拡張子が不正です".into());
     }
     let subagents = path
         .ancestors()
@@ -53,13 +53,15 @@ pub fn session_key(path: &Path) -> Result<(String, String, Option<String>), Stri
     if uuid(stem) && subagents.is_none() {
         return Ok((format!("claude:{stem}"), stem.into(), None));
     }
-    let parent = subagents.ok_or("invalid subagent path")?;
+    let parent = subagents.ok_or("サブエージェントのパスが不正です")?;
     let sid = parent
         .parent()
         .and_then(Path::file_name)
         .and_then(|s| s.to_str())
-        .ok_or("invalid parent session")?;
-    let agent = stem.strip_prefix("agent-").ok_or("invalid session id")?;
+        .ok_or("親セッションIDが不正です")?;
+    let agent = stem
+        .strip_prefix("agent-")
+        .ok_or("セッションIDが不正です")?;
     if parent.file_name().is_none_or(|s| s != "subagents")
         || !uuid(sid)
         || agent.is_empty()
@@ -68,7 +70,7 @@ pub fn session_key(path: &Path) -> Result<(String, String, Option<String>), Stri
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
     {
-        return Err("invalid subagent id".into());
+        return Err("サブエージェントIDが不正です".into());
     }
     Ok((
         format!("claude:{sid}:{stem}"),
@@ -78,8 +80,8 @@ pub fn session_key(path: &Path) -> Result<(String, String, Option<String>), Stri
 }
 
 pub fn parse_line(raw: &str, path: &Path) -> Result<Option<Event>, String> {
-    let v: Value = serde_json::from_str(raw).map_err(|_| "invalid JSON")?;
-    let typ = v["type"].as_str().ok_or("missing event type")?;
+    let v: Value = serde_json::from_str(raw).map_err(|_| "JSONが不正です")?;
+    let typ = v["type"].as_str().ok_or("イベント種別がありません")?;
     if !matches!(typ, "user" | "assistant") {
         return Ok(None);
     }
@@ -88,7 +90,7 @@ pub fn parse_line(raw: &str, path: &Path) -> Result<Option<Event>, String> {
     }
     let (session, native, parent) = session_key(path)?;
     if v["sessionId"].as_str().is_some_and(|s| s != native) {
-        return Err("session id mismatch".into());
+        return Err("セッションIDが一致しません".into());
     }
     let id = v["uuid"]
         .as_str()
@@ -98,19 +100,19 @@ pub fn parse_line(raw: &str, path: &Path) -> Result<Option<Event>, String> {
                 && s.bytes()
                     .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
         })
-        .ok_or("missing or invalid message id")?;
+        .ok_or("メッセージIDがないか不正です")?;
     let timestamp = v["timestamp"]
         .as_str()
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .ok_or("missing or invalid timestamp")?
+        .ok_or("日時がないか不正です")?
         .timestamp_millis();
     let cwd = v["cwd"]
         .as_str()
         .filter(|s| valid_cwd(s))
-        .ok_or("missing or invalid cwd")?;
+        .ok_or("作業ディレクトリがないか不正です")?;
     let content = &v["message"]["content"];
     if !v["message"].is_object() || !(content.is_string() || content.is_array()) {
-        return Err("missing message content".into());
+        return Err("メッセージの内容がありません".into());
     }
     let has = |kind: &str| {
         content
@@ -127,6 +129,7 @@ pub fn parse_line(raw: &str, path: &Path) -> Result<Option<Event>, String> {
         "アシスタント応答"
     };
     Ok(Some(Event {
+        text_truncated: false,
         details: Some(SessionDetails {
             parent_session_id: parent,
             git_branch: v["gitBranch"]
@@ -172,12 +175,13 @@ fn linked(meta: &std::fs::Metadata) -> bool {
 
 pub(crate) fn validate_file(path: &Path) -> Result<(), String> {
     for ancestor in path.ancestors() {
-        if linked(&std::fs::symlink_metadata(ancestor).map_err(|_| "unreadable transcript path")?) {
-            return Err("linked transcript path rejected".into());
+        if linked(&std::fs::symlink_metadata(ancestor).map_err(|_| "ログパスを読み取れません")?)
+        {
+            return Err("リンクされたログパスを除外しました".into());
         }
     }
     if !path.is_file() {
-        return Err("not a transcript file".into());
+        return Err("ログファイルではありません".into());
     }
     Ok(())
 }
@@ -186,11 +190,11 @@ pub(crate) fn discover(root: &Path) -> Result<(Vec<PathBuf>, Vec<String>), Strin
     let meta = std::fs::symlink_metadata(root)
         .map_err(|_| "Claude Code ログディレクトリが見つかりません")?;
     if !meta.is_dir() || linked(&meta) {
-        return Err("Claude Code projects must be an unlinked directory".into());
+        return Err("Claude Codeのprojectsにはリンクではないディレクトリを指定してください".into());
     }
     let root = root
         .canonicalize()
-        .map_err(|_| "unreadable Claude Code projects directory")?;
+        .map_err(|_| "Claude Codeのprojectsディレクトリを読み取れません")?;
     let rejected_links = std::cell::Cell::new(0usize);
     let mut files = vec![];
     let mut warnings = vec![];
@@ -214,7 +218,7 @@ pub(crate) fn discover(root: &Path) -> Result<(Vec<PathBuf>, Vec<String>), Strin
             Ok(e) => e,
             Err(_) => {
                 if warnings.len() < 20 {
-                    warnings.push("Claude Code: unreadable transcript directory".into());
+                    warnings.push("Claude Code: ログディレクトリを読み取れません".into());
                 }
                 continue;
             }
@@ -225,7 +229,7 @@ pub(crate) fn discover(root: &Path) -> Result<(Vec<PathBuf>, Vec<String>), Strin
         let relative = entry
             .path()
             .strip_prefix(&root)
-            .map_err(|_| "transcript outside root")?;
+            .map_err(|_| "ログが指定ディレクトリの外にあります")?;
         let depth = relative.components().count();
         let main = depth == 2
             && relative
@@ -236,7 +240,7 @@ pub(crate) fn discover(root: &Path) -> Result<(Vec<PathBuf>, Vec<String>), Strin
         let child = (4..=12).contains(&depth) && components[2].as_os_str() == "subagents";
         if !(main || child) || session_key(relative).is_err() {
             if warnings.len() < 20 {
-                warnings.push("Claude Code: invalid transcript path skipped".into());
+                warnings.push("Claude Code: 不正なログパスを読み飛ばしました".into());
             }
             continue;
         }
@@ -244,7 +248,7 @@ pub(crate) fn discover(root: &Path) -> Result<(Vec<PathBuf>, Vec<String>), Strin
     }
     if rejected_links.get() > 0 {
         warnings.push(format!(
-            "Claude Code: {} linked paths rejected",
+            "Claude Code: リンクされたパス {} 件を除外しました",
             rejected_links.get()
         ));
     }
