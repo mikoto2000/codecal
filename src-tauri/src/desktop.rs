@@ -87,6 +87,8 @@ mod tests {
         assert!(warnings[1].contains("れい"));
         std::fs::create_dir(&c.log_root).unwrap();
         std::fs::create_dir(&c.rei_root).unwrap();
+        assert!(log_root_warnings(&c)[0].contains("storage.db または projects"));
+        std::fs::create_dir(std::path::Path::new(&c.rei_root).join("projects")).unwrap();
         assert!(log_root_warnings(&c).is_empty());
         let file = tmp.path().join("not-a-directory");
         std::fs::write(&file, "").unwrap();
@@ -180,6 +182,12 @@ fn log_root_warnings(value: &Config) -> Vec<String> {
             warnings.push(format!(
                 "{source} のログディレクトリが見つかりません: {root}"
             ));
+        }
+    }
+    let rei_root = std::path::Path::new(&value.rei_root);
+    if value.rei_enabled && rei_root.is_dir() {
+        if let Err(message) = crate::rei::validate_root(rei_root) {
+            warnings.push(format!("{message}: {}", rei_root.display()));
         }
     }
     warnings

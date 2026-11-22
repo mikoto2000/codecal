@@ -53,6 +53,17 @@ fn readonly(path: &Path) -> Result<Connection, String> {
     c.pragma_update(None, "query_only", true).map_err(err)?;
     Ok(c)
 }
+pub(crate) fn validate_root(root: &Path) -> Result<(), String> {
+    if !root.is_dir() {
+        return Err("れいのデータディレクトリが見つかりません".into());
+    }
+    if !root.join("storage.db").is_file() && !root.join("projects").is_dir() {
+        return Err(
+            "れいの取り込み対象（storage.db または projects ディレクトリ）が見つかりません".into(),
+        );
+    }
+    Ok(())
+}
 fn table(c: &Connection, name: &str) -> Result<bool, String> {
     c.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)",
@@ -227,9 +238,7 @@ fn prompt(c: &Connection, project: &str, run: &str) -> Result<Option<String>, St
 impl Store {
     /// A failure of one Rei source does not prevent importing the other sources.
     pub fn sync_rei(&mut self, root: &Path) -> Result<Progress, String> {
-        if !root.is_dir() {
-            return Err("れいのデータディレクトリが見つかりません".into());
-        }
+        validate_root(root)?;
         let mut warnings = vec![];
         let map = match projects(root) {
             Ok(p) => {

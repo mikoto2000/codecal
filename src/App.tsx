@@ -504,6 +504,11 @@ export default function App({ initialDate }: { initialDate?: string }) {
             <p>
               ログの保存先が異なる場合は設定で変更できます。元のログは変更しません。
             </p>
+            {config.rei_enabled && (
+              <p>
+                れいの履歴取り込みが有効です。不要な場合は設定で無効にできます。
+              </p>
+            )}
             <button onClick={openSettings}>初期設定を確認</button>
             <button onClick={() => setFirstRun(false)}>案内を閉じる</button>
           </section>

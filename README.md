@@ -47,7 +47,7 @@ Codexホームを指定した場合、`sessions` と `archived_sessions` のロ�
 
 「れい」は「設定」の「れいの実行履歴を取り込む」で有効・無効を切り替えます。既定のデータディレクトリが存在する場合は自動的に有効になります。保存先は `REI_DATA_DIR` を優先し、未設定ならWindowsは `%LOCALAPPDATA%/Rei`、macOSは `~/Library/Application Support/Rei`、Linuxは `${XDG_DATA_HOME:-~/.local/share}/rei` です。起動オプションなどで別の保存先を使っている場合は設定で指定してください。
 
-指定先の `storage.db`（SQLite、WALを含む）と、旧形式の `projects/<projectId>/events/events.jsonl` を読み取り専用で参照します。同じイベントが両方にあっても二重計上しません。同じ作業ディレクトリならCodexと同じプロジェクトへ集約し、詳細で取得元を確認できます。接続・認証設定や「れい」の起動は不要です。
+指定先の `storage.db`（SQLite、WALを含む）と、旧形式の `projects/<projectId>/events/events.jsonl` を読み取り専用で参照します。`storage.db` と `projects` ディレクトリのどちらも見つからない場合は、設定保存時と同期時に警告します。初回案内に有効状態を表示し、設定から無効にできます。同じイベントが両方にあっても二重計上しません。同じ作業ディレクトリならCodexと同じプロジェクトへ集約し、詳細で取得元を確認できます。接続・認証設定や「れい」の起動は不要です。
 
 ### 3. カレンダーで作業を振り返る
 
