@@ -41,6 +41,26 @@ fn default_rei_enabled() -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn corrupt_and_invalid_settings_are_backed_up_and_recovered_once() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        for raw in ["{broken".to_string(), serde_json::json!({"log_root":"/logs","timezone":"bad/zone","week_start":1,"theme":"system","thresholds":[1,3,6],"auto_refresh":true}).to_string()] {
+            store.set_setting("config", &raw).unwrap();
+            store.set_setting("unrelated", "keep").unwrap();
+            let (c, first, notices) = bootstrap_config(&store, "Asia/Tokyo".into()).unwrap();
+            assert!(!first);
+            assert_eq!(c.timezone, "Asia/Tokyo");
+            assert_eq!(notices.len(), 1);
+            let start = notices[0].find('「').unwrap() + '「'.len_utf8();
+            let end = notices[0].find('」').unwrap();
+            let backup = &notices[0][start..end];
+            assert_eq!(store.get_setting(backup).unwrap().as_deref(), Some(raw.as_str()));
+            assert_eq!(store.get_setting("unrelated").unwrap().as_deref(), Some("keep"));
+            let (_, _, next_notices) = bootstrap_config(&store, "UTC".into()).unwrap();
+            assert!(next_notices.is_empty());
+            assert_eq!(config(&store).unwrap().timezone, "Asia/Tokyo");
+        }
+    }
+    #[test]
     fn first_boot_reports_unknown_timezone_and_keeps_saved_choice() {
         let store = Store::open(std::path::Path::new(":memory:")).unwrap();
         let (c, first, notices) = bootstrap_config(&store, "invalid/zone".into()).unwrap();
@@ -79,6 +99,8 @@ mod tests {
         assert_eq!(c.timezone, "Asia/Tokyo");
         assert_eq!(c.theme, "dark");
         assert!(!c.auto_refresh);
+        let c: Config = serde_json::from_str(r##"{"log_root":"/logs","timezone":"UTC","week_start":1,"theme":"system","thresholds":[1,3,6,12],"auto_refresh":false}"##).unwrap();
+        assert_eq!(c.thresholds, [1., 3., 6.]);
     }
     #[test]
     fn missing_log_roots_warn_without_rejecting_future_directories() {
@@ -116,6 +138,7 @@ fn read_thresholds<'de, D: serde::Deserializer<'de>>(
     if values.len() != 3 && values.len() != 4 {
         return Err(serde::de::Error::custom("three thresholds required"));
     }
+    // Keep accepting legacy four-value settings without resetting preferences.
     Ok([values[0], values[1], values[2]])
 }
 impl Default for Config {
@@ -156,10 +179,12 @@ pub struct Bootstrap {
     notices: Vec<String>,
 }
 fn config(store: &Store) -> Result<Config, String> {
-    store
+    let c = store
         .get_setting("config")?
         .map(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))
-        .unwrap_or_else(|| Ok(Config::default()))
+        .unwrap_or_else(|| Ok(Config::default()))?;
+    validate_config(&c)?;
+    Ok(c)
 }
 #[tauri::command]
 pub async fn bootstrap(app: tauri::AppHandle, timezone: String) -> Result<Bootstrap, String> {
@@ -198,18 +223,27 @@ fn bootstrap_config(
     timezone: String,
 ) -> Result<(Config, bool, Vec<String>), String> {
     let first_run = store.get_setting("config")?.is_none();
-    let mut c = config(store)?;
     let mut notices = vec![];
-    if first_run {
+    let loaded = if first_run {
+        Ok(Config::default())
+    } else {
+        config(store)
+    };
+    let recovered = loaded.is_err();
+    let mut c = loaded.unwrap_or_default();
+    if first_run || recovered {
         if timezone.parse::<chrono_tz::Tz>().is_ok() {
             c.timezone = timezone;
         } else {
             notices.push(format!("端末のタイムゾーン「{timezone}」を認識できなかったため UTC を使用しています。設定で確認してください。"));
         }
-        store.set_setting(
-            "config",
-            &serde_json::to_string(&c).map_err(|e| e.to_string())?,
-        )?;
+        let serialized = serde_json::to_string(&c).map_err(|e| e.to_string())?;
+        if recovered {
+            let backup = store.reset_setting_with_backup("config", &serialized)?;
+            notices.push(format!("保存済みの設定を読み込めなかったため、既定の設定で復旧しました。元の設定はDBの settings テーブルの「{backup}」に退避しています。取り込み先とタイムゾーンを設定で確認してください。"));
+        } else {
+            store.set_setting("config", &serialized)?;
+        }
     }
     Ok((c, first_run, notices))
 }
@@ -235,14 +269,22 @@ fn log_root_warnings(value: &Config) -> Vec<String> {
     warnings
 }
 #[tauri::command]
-pub async fn save_config(state: State<'_, AppState>, value: Config) -> Result<Vec<String>, String> {
-    validate_config(&value)?;
-    let warnings = log_root_warnings(&value);
-    state.store.lock().map_err(|e| e.to_string())?.set_setting(
-        "config",
-        &serde_json::to_string(&value).map_err(|e| e.to_string())?,
-    )?;
-    Ok(warnings)
+pub async fn save_config(app: tauri::AppHandle, value: Config) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        validate_config(&value)?;
+        let warnings = log_root_warnings(&value);
+        app.state::<AppState>()
+            .store
+            .lock()
+            .map_err(|e| e.to_string())?
+            .set_setting(
+                "config",
+                &serde_json::to_string(&value).map_err(|e| e.to_string())?,
+            )?;
+        Ok(warnings)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 fn validate_config(value: &Config) -> Result<(), String> {
     if value.timezone.parse::<chrono_tz::Tz>().is_err() {
@@ -270,12 +312,15 @@ fn validate_config(value: &Config) -> Result<(), String> {
 #[tauri::command]
 pub async fn snapshot(app: tauri::AppHandle, timezone: String) -> Result<Snapshot, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        timezone
+            .parse::<chrono_tz::Tz>()
+            .map_err(|_| "invalid timezone")?;
         app.try_state::<AppState>()
             .ok_or("CodeCal がデータベースを準備しています")?
             .store
             .lock()
             .map_err(|e| e.to_string())?
-            .snapshot(&timezone)
+            .snapshot_for_display()
     })
     .await
     .map_err(|e| e.to_string())?
@@ -301,11 +346,6 @@ fn sync_app(app: &tauri::AppHandle) -> Result<Progress, String> {
     );
     if result.is_ok() {
         let _ = app.emit("data-changed", ());
-    }
-    if let Ok(p) = &result {
-        if !p.warnings.is_empty() {
-            let _ = app.emit("sync-error", p.warnings.join("\n"));
-        }
     }
     result
 }
@@ -381,16 +421,27 @@ pub fn run() {
             std::thread::spawn(move || {
                 use notify::{RecursiveMode, Watcher};
                 let (sender, receiver) = std::sync::mpsc::channel();
-                let mut watcher = notify::recommended_watcher(move |result| {
+                let watcher_result = notify::recommended_watcher(move |result| {
                     let _ = sender.send(result);
-                })
-                .ok();
+                });
+                let watcher_warning = watcher_result.as_ref().err().map(|e| {
+                    format!("ファイル監視を初期化できません。30秒ごとの定期走査で補完します: {e}")
+                });
+                let mut watcher = watcher_result.ok();
                 let mut watching: Vec<String> = Vec::new();
                 let mut dirty: Option<Instant> = None;
                 let mut first_dirty: Option<Instant> = None;
                 let mut last_scan = Instant::now();
                 loop {
-                    if let Ok(event) = receiver.recv_timeout(Duration::from_millis(300)) {
+                    let received = receiver.recv_timeout(Duration::from_millis(300));
+                    if matches!(
+                        received,
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+                    ) {
+                        // A failed watcher drops its sender; avoid polling a disconnected channel.
+                        std::thread::sleep(Duration::from_millis(300));
+                    }
+                    if let Ok(event) = received {
                         match event {
                             Ok(event)
                                 if event.paths.iter().any(|p| {
@@ -413,8 +464,10 @@ pub fn run() {
                             }
                             Ok(_) => {}
                             Err(_) => {
-                                let _ = handle
-                                    .emit("sync-error", "ファイル監視エラー。定期走査で補完します");
+                                let _ = handle.emit(
+                                    "watch-warning",
+                                    "ファイル監視エラー。定期走査で補完します",
+                                );
                             }
                         }
                     }
@@ -435,6 +488,10 @@ pub fn run() {
                         roots.push(c.claude_root);
                     }
                     if roots != watching {
+                        let mut watch_warnings = vec![];
+                        if let Some(message) = &watcher_warning {
+                            watch_warnings.push(message.clone());
+                        }
                         if let Some(w) = watcher.as_mut() {
                             for root in &watching {
                                 let _ = w.unwatch(std::path::Path::new(root));
@@ -443,20 +500,27 @@ pub fn run() {
                                 if let Err(e) =
                                     w.watch(std::path::Path::new(root), RecursiveMode::Recursive)
                                 {
-                                    let _ = handle
-                                        .emit("sync-error", format!("監視を開始できません: {e}"));
+                                    watch_warnings.push(format!(
+                                        "監視を開始できません。定期走査で補完します: {e}"
+                                    ));
                                 }
                             }
                         }
                         watching = roots;
+                        let _ = handle.emit("watch-warning", watch_warnings.join("\n"));
                     }
                     if c.auto_refresh
                         && (dirty.is_some_and(|t| t.elapsed() >= Duration::from_millis(600))
                             || first_dirty.is_some_and(|t| t.elapsed() >= Duration::from_secs(5))
                             || last_scan.elapsed() >= Duration::from_secs(30))
                     {
-                        if let Err(e) = sync_app(&handle) {
-                            let _ = handle.emit("sync-error", e);
+                        match sync_app(&handle) {
+                            Ok(p) => {
+                                let _ = handle.emit("sync-warning", p.warnings);
+                            }
+                            Err(e) => {
+                                let _ = handle.emit("sync-error", e);
+                            }
                         }
                         dirty = None;
                         first_dirty = None;

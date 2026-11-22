@@ -776,3 +776,94 @@ test("database startup failures stop the spinner and allow retry", async () => {
     await stop();
   }
 });
+
+test("corrupt settings recover with a persistent backup and dialogs restore focus", async () => {
+  test.setTimeout(90000);
+  mkdirSync(path.join(logs, "sessions"), { recursive: true });
+  mkdirSync(appdata, { recursive: true });
+  await launch();
+  await stop();
+  const dbPath = path.join(appdata, "codecal.db");
+  const db = new DatabaseSync(dbPath);
+  const original = "{synthetic-invalid-config";
+  db.prepare("UPDATE settings SET value=? WHERE key='config'").run(original);
+  db.close();
+  try {
+    await launch(false);
+    await expect(
+      page.getByText(/保存済みの設定を読み込めなかったため/),
+    ).toBeVisible();
+    const trigger = page.getByRole("button", {
+      name: "設定を確認",
+      exact: true,
+    });
+    await trigger.click();
+    const dialog = page.getByRole("dialog", { name: "設定", exact: true });
+    await expect(dialog).toBeVisible();
+    const name = page.getByLabel("Codex ログディレクトリ", { exact: true });
+    await expect(name).toHaveValue(logs);
+    const updateButtons = dialog.getByRole("button", {
+      name: "更新",
+      exact: true,
+    });
+    const last =
+      (await updateButtons.count()) > 0
+        ? updateButtons.last()
+        : dialog.getByRole("button", { name: "設定を保存", exact: true });
+    await last.focus();
+    // Modal background controls are inert, including for programmatic focus.
+    await page.evaluate(() =>
+      document.querySelector<HTMLButtonElement>(".settings-button")?.focus(),
+    );
+    await expect(last).toBeFocused();
+    await page.keyboard.press("Tab");
+    // WebView2 can transfer focus to its native host for one Tab stop. It must
+    // never move to a background control, and the next Tab returns to the dialog.
+    expect(
+      await page.evaluate(
+        () =>
+          Boolean(document.activeElement?.closest("dialog")) ||
+          (document.activeElement === document.body && !document.hasFocus()),
+      ),
+    ).toBe(true);
+    await page.keyboard.press("Tab");
+    await expect
+      .poll(() =>
+        page.evaluate(() => Boolean(document.activeElement?.closest("dialog"))),
+      )
+      .toBe(true);
+    await page.getByRole("button", { name: "閉じる", exact: true }).click();
+    await expect(trigger).toBeFocused();
+    await page.getByRole("button", { name: "設定", exact: true }).click();
+    await page.keyboard.press("Escape");
+    await expect(
+      page.getByRole("button", { name: "設定", exact: true }),
+    ).toBeFocused();
+    await stop();
+    const saved = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      expect(
+        saved
+          .prepare(
+            "SELECT value FROM settings WHERE key GLOB '_config_backup_*'",
+          )
+          .all(),
+      ).toEqual([{ value: original }]);
+      const row = saved
+        .prepare("SELECT value FROM settings WHERE key='config'")
+        .get()!;
+      expect(JSON.parse(String(row.value)).log_root).toBe(logs);
+    } finally {
+      saved.close();
+    }
+    await launch(false);
+    await expect(
+      page.getByRole("button", { name: "設定", exact: true }),
+    ).toBeEnabled();
+    await expect(
+      page.getByText(/保存済みの設定を読み込めなかったため/),
+    ).toHaveCount(0);
+  } finally {
+    await stop();
+  }
+});

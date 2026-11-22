@@ -1,18 +1,18 @@
 # アーキテクチャ
 
 ```text
-read-only Codex JSONL / Rei SQLite・JSONL → normalized events → SQLite transactions
+read-only Codex JSONL / Rei SQLite・JSONL / Claude JSONL → normalized events → SQLite transactions
                                                  ↓ replay by session/turn
                                        projects / sessions / turns / intervals
                                                  ↓ UTC + IANA zone aggregation
                                       Tauri commands/events → React calendars
 ```
 
-RustコアはTauriから分離しています。`parser` は1行の正規化、`store` はマイグレーション・増分走査・重複除去・ターン再構築、`activity` はUTC区間の和集合と日別分割を担当します。`desktop` はアプリ保存先、IPC、監視を担当します。`--no-default-features` でWebViewなしのコアをテストできます。
+RustコアはTauriから分離しています。`parser` は1行の正規化、`migrations` はDB構造の検証・バックアップ・段階移行、`claude` はClaudeログのメタデータ抽出と推定区間への変換、`store` は増分走査・重複除去・ターン再構築、`activity` はUTC区間の和集合と日別分割を担当します。`desktop` はアプリ保存先、IPC、監視を担当します。`--no-default-features` でWebViewなしのコアをテストできます。
 
-ReactはIPCから受け取ったデータを安全なテキストとして描画します。日付移動・フィルタ・重複配置・表示期間にクリップした集計を `calendar.ts` に分離しています。バックエンド集計とUI計算の両方に日跨ぎ・重複テストがあります。フロントエンドから任意パスの読み取りやコマンド実行はできません。ログ参照はDBに記録済みのターンIDから出典を解決します。
+ReactはIPCから受け取ったデータを安全なテキストとして描画します。日付移動・フィルタ・重複配置・表示期間にクリップした集計を `calendar.ts` に分離しています。バックエンド集計とUI計算は共通の合成フィクスチャで日跨ぎ・重複・DST・欠落日を照合します。UI向けsnapshotでは未使用の日次集計を計算・転送せず、コアAPIのsnapshotでは日次集計を利用できます。フロントエンドから任意パスの読み取りやコマンド実行はできません。ログ参照はDBに記録済みのターンIDから出典を解決します。
 
-読み込みは `spawn_blocking` でUIスレッドから外します。独立した4ファイルまでRayonで並行解析し、DBは単一Mutexとトランザクションで直列化します。監視はnotify、600ms debounce、更新が続く場合は5秒以内、30秒の再走査で補完します。進捗と更新はローカルTauriイベントです。
+読み込みは `spawn_blocking` でUIスレッドから外します。独立した4ファイルまでRayonで並行解析し、DBは単一Mutexとトランザクションで直列化します。監視はnotify、600ms debounce、更新が続く場合は5秒以内、30秒の再走査で補完します。進捗と更新はローカルTauriイベントです。Claude取り込み中もファイルごとに進捗を通知します。警告と失敗は別チャネルで扱い、手動同期の警告は戻り値、自動同期の警告はイベントから表示します。監視の初期化・開始失敗は警告として通知し、監視できない場合も30秒ごとの再走査を続けます。設定保存の同期ロックとDB書き込みもblocking workerで実行します。
 
 ## ライブラリ選定
 
@@ -22,7 +22,7 @@ FullCalendar Standardの非Premiumプラグインは [公式ライセンス](htt
 
 ## プライバシー
 
-ネットワーク通信プラグイン、ファイルシステムプラグイン、シェルプラグインは導入していません。Tauri権限はローカルイベント購読/解除のみです。CSPは自身のアセットとIPCに限定しています。原本は `File::open` の読み取りのみ。DBは依頼文（上限16Ki文字）・必要なイベント・オフセットを保持し、ツール引数・出力・推論本文を保存しません。DBも秘密を含み得るローカルデータです。
+ネットワーク通信プラグイン、ファイルシステムプラグイン、シェルプラグインは導入していません。Tauri権限はローカルイベント購読/解除のみです。CSPは自身のアセットとIPCに限定しています。原本は `File::open` の読み取りのみ。DBは依頼文（上限16Ki文字）・必要なイベント・オフセットを保持し、ツール引数・出力・推論本文を保存しません。Codex依頼文の切り詰めは診断へ記録します。Claudeでは会話本文を保存せず、活動種別・cwd・ブランチ・親セッションID・出典パス等のメタデータを保持します。DBと生ログ抜粋は秘密を含み得るローカルデータです。
 
 ## 次の改善
 

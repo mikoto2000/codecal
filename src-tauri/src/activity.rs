@@ -42,11 +42,17 @@ pub fn aggregate(intervals: &[Interval], timezone: &str) -> Result<Vec<Day>, Str
                 .with_timezone(&tz);
             let next_date = local.date_naive().succ_opt().ok_or("date overflow")?;
             let midnight = next_date.and_hms_opt(0, 0, 0).ok_or("invalid midnight")?;
-            // Some zones skip midnight; find the first valid instant of the following date.
-            let boundary = (0..=180)
-                .find_map(|m| {
-                    tz.from_local_datetime(&(midnight + Duration::minutes(m)))
+            // A historical zone change may skip an entire date (e.g. Apia 2011).
+            // Search through the next two dates as well as ordinary midnight gaps.
+            let boundary = (0..=2)
+                .find_map(|day| {
+                    (0..=180).find_map(|m| {
+                        tz.from_local_datetime(
+                            &(midnight + Duration::days(day) + Duration::minutes(m)),
+                        )
                         .earliest()
+                        .filter(|instant| instant.timestamp_millis() > start)
+                    })
                 })
                 .ok_or("unresolvable date boundary")?
                 .timestamp_millis();

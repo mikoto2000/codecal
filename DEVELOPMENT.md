@@ -45,7 +45,7 @@ npm run build
 npm run tauri build
 ```
 
-Windowsの既定ビルドでは `src-tauri/target/release/codecal.exe` と `src-tauri/target/release/bundle/nsis/CodeCal_1.0.0_x64-setup.exe` を生成します。インストールせず実行ファイルを直接起動することもできます。macOS・Linux向けのバンドル指定と全6構成のビルド方法は [リリース手順](docs/releasing.md) を参照してください。
+以下はTauriのローカル出力名です。GitHub Releaseへの添付時は `scripts/release.mjs` がOS・CPUを含む名前に改名します。Windowsの既定ビルドでは `src-tauri/target/release/codecal.exe` と `src-tauri/target/release/bundle/nsis/CodeCal_1.0.0_x64-setup.exe` を生成します。インストールせず実行ファイルを直接起動することもできます。macOS・Linux向けのバンドル指定と全6構成のビルド方法は [リリース手順](docs/releasing.md) を参照してください。
 
 Rustコアのみは、デスクトップ機能を外して検証できます。
 
@@ -127,6 +127,8 @@ node scripts/create-sample.mjs
 - [データベース](docs/database-schema.md)
 - [テスト・検証](docs/testing.md)
 - [初期開発の検証記録](docs/delivery-report.md)
+- [れいの実行履歴](docs/rei-history.md)
+- [リリース手順](docs/releasing.md)
 
 ## Claude Code ログ
 

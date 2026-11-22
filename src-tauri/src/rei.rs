@@ -174,6 +174,7 @@ fn parse(raw: &str, project: &str, projects: &Projects) -> Result<Option<Record>
         id: text(&v, "id").ok_or("missing event id")?,
         project: project.into(),
         event: Event {
+            text_truncated: false,
             details: None,
             source: Some("rei".into()),
             project_name: Some(name),
@@ -243,12 +244,12 @@ impl Store {
         let mut warnings = vec![];
         let map = match projects(root) {
             Ok(p) => {
-                self.rei_diagnostic(&root.join("projects.json"), None)?;
+                self.source_diagnostic(&root.join("projects.json"), None)?;
                 p
             }
             Err(e) => {
                 warnings.push(format!("れい: projects.json: {e}"));
-                self.rei_diagnostic(&root.join("projects.json"), Some(&e))?;
+                self.source_diagnostic(&root.join("projects.json"), Some(&e))?;
                 BTreeMap::new()
             }
         };
@@ -263,10 +264,10 @@ impl Store {
             match self.rei_database(&db, &map) {
                 Ok(bytes) => {
                     progress.bytes_read += bytes;
-                    self.rei_diagnostic(&db, None)?;
+                    self.source_diagnostic(&db, None)?;
                 }
                 Err(e) => {
-                    self.rei_diagnostic(&db, Some(&e))?;
+                    self.source_diagnostic(&db, Some(&e))?;
                     progress.warnings.push(format!("れい: storage.db: {e}"));
                 }
             }
@@ -279,7 +280,10 @@ impl Store {
                     progress
                         .warnings
                         .push("れい: 旧ログディレクトリを読み取れません".into());
-                    self.rei_diagnostic(&dirs, Some("れいの旧ログディレクトリを読み取れません"))?;
+                    self.source_diagnostic(
+                        &dirs,
+                        Some("れいの旧ログディレクトリを読み取れません"),
+                    )?;
                     None
                 }
             };
@@ -290,7 +294,7 @@ impl Store {
                         progress
                             .warnings
                             .push("れい: 旧ログ項目を読み取れません".into());
-                        self.rei_diagnostic(&dirs, Some("れいの旧ログ項目を読み取れません"))?;
+                        self.source_diagnostic(&dirs, Some("れいの旧ログ項目を読み取れません"))?;
                         continue;
                     }
                 };
@@ -305,7 +309,7 @@ impl Store {
                 match self.rei_jsonl(&file, &entry.file_name().to_string_lossy(), &map) {
                     Ok(bytes) => progress.bytes_read += bytes,
                     Err(e) => {
-                        self.rei_diagnostic(&file, Some(&e))?;
+                        self.source_diagnostic(&file, Some(&e))?;
                         progress
                             .warnings
                             .push(format!("れい: {}: {e}", file.display()));
@@ -317,7 +321,11 @@ impl Store {
         self.rebuild_if_dirty()?;
         Ok(progress)
     }
-    pub(crate) fn rei_diagnostic(&self, path: &Path, message: Option<&str>) -> Result<(), String> {
+    pub(crate) fn source_diagnostic(
+        &self,
+        path: &Path,
+        message: Option<&str>,
+    ) -> Result<(), String> {
         let path = path.display().to_string();
         if let Some(message) = message {
             self.conn
@@ -469,19 +477,19 @@ impl Store {
                 )
                 .map_err(err)?;
             let warning_message = warnings.join("\n");
-            self.rei_diagnostic(
+            self.source_diagnostic(
                 &diagnostic_path,
                 (!warning_message.is_empty()).then_some(warning_message.as_str()),
             )?;
         }
         let prompt_path = PathBuf::from(format!("{key} [依頼文]"));
         if has_turns && self.rei_prompts(&c, &key).is_err() {
-            self.rei_diagnostic(
+            self.source_diagnostic(
                 &prompt_path,
                 Some("れいの依頼文を読み取れません。実行イベントの取り込みは継続します"),
             )?;
         } else {
-            self.rei_diagnostic(&prompt_path, None)?;
+            self.source_diagnostic(&prompt_path, None)?;
         }
         Ok(bytes)
     }
@@ -631,7 +639,7 @@ impl Store {
             }
         }
         if !warnings.is_empty() {
-            self.rei_diagnostic(path, Some(&warnings.join("\n")))?;
+            self.source_diagnostic(path, Some(&warnings.join("\n")))?;
         }
         Ok(offset - initial)
     }

@@ -38,6 +38,64 @@ fn message(id: &str, time: &str, kind: &str) -> String {
         + "\n"
 }
 #[test]
+fn reports_file_progress_during_claude_import() {
+    use std::cell::RefCell;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("projects");
+    fs::create_dir_all(root.join("p")).unwrap();
+    fs::write(
+        root.join("p").join(format!("{SID}.jsonl")),
+        message("a", "2026-11-20T10:00:00Z", "user")
+            + &message("b", "2026-11-20T10:01:00Z", "assistant"),
+    )
+    .unwrap();
+    let mut store = Store::open(&tmp.path().join("test.db")).unwrap();
+    let progress = RefCell::new(vec![]);
+    store
+        .sync_all_sources(
+            &tmp.path().join("missing-codex"),
+            None,
+            Some(&root),
+            |done, total| progress.borrow_mut().push((done, total)),
+        )
+        .unwrap();
+    assert!(progress.borrow().contains(&(1, 1)));
+    assert_eq!(store.snapshot("UTC").unwrap().turns.len(), 1);
+}
+#[test]
+fn snapshot_keeps_the_first_metadata_for_each_turn_in_a_session() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("projects");
+    fs::create_dir_all(root.join("p")).unwrap();
+    let log = message("a", "2026-11-20T10:00:00Z", "user").replace("main", "first")
+        + &message("b", "2026-11-20T10:01:00Z", "assistant")
+        + &message("c", "2026-11-20T10:02:00Z", "user").replace("main", "second")
+        + &message("d", "2026-11-20T10:03:00Z", "assistant");
+    fs::write(root.join("p").join(format!("{SID}.jsonl")), log).unwrap();
+    let mut store = Store::open(&tmp.path().join("test.db")).unwrap();
+    store.sync_claude(&root).unwrap();
+    let snapshot = store.snapshot_for_display().unwrap();
+    assert_eq!(snapshot.turns.len(), 2);
+    assert_eq!(
+        snapshot.turns[0]
+            .details
+            .as_ref()
+            .unwrap()
+            .git_branch
+            .as_deref(),
+        Some("first")
+    );
+    assert_eq!(
+        snapshot.turns[1]
+            .details
+            .as_ref()
+            .unwrap()
+            .git_branch
+            .as_deref(),
+        Some("second")
+    );
+}
+#[test]
 fn imports_incrementally_into_shared_intervals_and_excludes_idle() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("projects");

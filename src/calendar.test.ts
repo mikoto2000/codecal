@@ -5,8 +5,31 @@ import {
   packSegments,
   totals,
   heatLevel,
+  indexActivity,
+  formatDuration,
 } from "./calendar";
+import sharedCases from "../tests/fixtures/activity.json";
 import type { Turn } from "./types";
+it.each(sharedCases)("matches the shared Rust fixture: $name", (fixture) => {
+  const turns = fixture.intervals.map((item, i) => ({
+    ...t(item.start, item.end, String(i)),
+    project_id: item.project_id,
+  }));
+  const actual = [...indexActivity(turns, fixture.timezone)]
+    .map(([date, day]) => ({
+      date,
+      elapsed_ms: day.elapsed_ms,
+      total_ms: day.total_ms,
+      projects: day.projects,
+    }))
+    .filter((day) => day.total_ms > 0);
+  expect(actual).toEqual(fixture.days);
+});
+it("formats invalid durations without negative or nonfinite text", () => {
+  for (const ms of [-1, NaN, Infinity])
+    expect(formatDuration(ms)).toBe("0h 0m");
+  expect(formatDuration(3660000)).toBe("1h 1m");
+});
 const t = (start: string, end: string | null, id = "a"): Turn => ({
   id,
   turn_id: id,

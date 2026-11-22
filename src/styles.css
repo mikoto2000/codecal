@@ -591,7 +591,8 @@ footer button {
 .setup-notice button + button {
   margin-left: 8px;
 }
-.error-banner {
+.error-banner,
+.warning-banner {
   padding: 12px 15px;
   background: #7f1d1d;
   color: #fff;
@@ -602,7 +603,16 @@ footer button {
   justify-content: space-between;
   overflow-wrap: anywhere;
 }
-.error-banner button {
+.warning-banner {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid #b7791f;
+}
+.warning-banner ul {
+  margin: 4px 0;
+}
+.error-banner button,
+.warning-banner button {
   background: transparent;
   border: 0;
   color: inherit;

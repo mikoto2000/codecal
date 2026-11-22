@@ -77,7 +77,7 @@ $overviewPath = ".local/release-notes/$tag-overview.md"
 $notesPath = ".local/release-notes/$tag.md"
 $release = gh release view $tag --json body | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) { throw "リリースノートを取得できませんでした" }
-if ($release.body.StartsWith("## 概要")) {
+if ($release.body -match '(?m)^[\s\uFEFF]*##[ \t]+概要[ \t]*(?:\r?$)') {
   throw "概要は追加済みです。重複させず、既存の概要を編集してください"
 }
 $overview = Get-Content -LiteralPath $overviewPath -Raw -Encoding utf8

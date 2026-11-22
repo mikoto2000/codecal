@@ -26,7 +26,7 @@ export type Day = {
 export type Snapshot = {
   projects: Project[];
   turns: Turn[];
-  days: Day[];
+  days?: Day[];
   diagnostics: string[];
   diagnostics_total: number;
 };
