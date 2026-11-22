@@ -1,0 +1,61 @@
+name: 不具合報告
+description: CodeCalの不具合と再現に必要な情報を報告します。
+body:
+  - type: markdown
+    attributes:
+      value: |
+        OS・CPUと再現手順を記載してください。実ログやDBの添付は不要です。
+        診断を共有する場合は、ユーザー名・絶対パス・依頼文などを確認し、必要に応じて伏せてください。
+  - type: input
+    id: version
+    attributes:
+      label: CodeCalのバージョン
+      placeholder: 例 v1.0.0 / ソース実行の場合はコミットSHA
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: OSとCPU
+      placeholder: 例 Windows 11 x64 / macOS 15 ARM64 / Ubuntu 22.04 x64
+    validations:
+      required: true
+  - type: dropdown
+    id: source
+    attributes:
+      label: 取り込み元
+      multiple: true
+      options:
+        - Codex
+        - れい
+        - 取り込みに関係しない・不明
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 再現手順
+      description: 実施した操作を順番に記載してください。
+      placeholder: |
+        1. 設定を開く
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待する動作
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 実際の動作
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 診断・エラーメッセージ（任意）
+      description: アプリの「診断」からコピーできます。共有する情報を確認してから貼り付けてください。
+      render: text
