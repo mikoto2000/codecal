@@ -46,10 +46,14 @@ pub fn session_key(path: &Path) -> Result<(String, String, Option<String>), Stri
     if path.extension().is_none_or(|s| s != "jsonl") {
         return Err("invalid transcript suffix".into());
     }
-    if uuid(stem) {
+    let subagents = path
+        .ancestors()
+        .skip(1)
+        .find(|p| p.file_name().is_some_and(|s| s == "subagents"));
+    if uuid(stem) && subagents.is_none() {
         return Ok((format!("claude:{stem}"), stem.into(), None));
     }
-    let parent = path.parent().ok_or("invalid subagent path")?;
+    let parent = subagents.ok_or("invalid subagent path")?;
     let sid = parent
         .parent()
         .and_then(Path::file_name)
@@ -167,7 +171,7 @@ fn linked(meta: &std::fs::Metadata) -> bool {
 }
 
 pub(crate) fn validate_file(path: &Path) -> Result<(), String> {
-    for ancestor in path.ancestors().take(5) {
+    for ancestor in path.ancestors() {
         if linked(&std::fs::symlink_metadata(ancestor).map_err(|_| "unreadable transcript path")?) {
             return Err("linked transcript path rejected".into());
         }
@@ -191,7 +195,7 @@ pub(crate) fn discover(root: &Path) -> Result<(Vec<PathBuf>, Vec<String>), Strin
     let mut files = vec![];
     let mut warnings = vec![];
     for entry in walkdir::WalkDir::new(&root)
-        .max_depth(4)
+        .max_depth(12)
         .follow_links(false)
         .follow_root_links(false)
         .into_iter()
@@ -228,11 +232,8 @@ pub(crate) fn discover(root: &Path) -> Result<(Vec<PathBuf>, Vec<String>), Strin
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .is_some_and(uuid);
-        let child = depth == 4
-            && relative
-                .parent()
-                .and_then(Path::file_name)
-                .is_some_and(|s| s == "subagents");
+        let components: Vec<_> = relative.components().collect();
+        let child = (4..=12).contains(&depth) && components[2].as_os_str() == "subagents";
         if !(main || child) || session_key(relative).is_err() {
             if warnings.len() < 20 {
                 warnings.push("Claude Code: invalid transcript path skipped".into());

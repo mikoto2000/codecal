@@ -358,3 +358,30 @@ fn rejects_windows_junction_escape() {
     assert!(!result.warnings.is_empty());
     assert!(s.sync_claude(&link).is_err());
 }
+#[test]
+fn discovers_nested_subagent_transcripts_without_requiring_parent_log() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("projects");
+    let agents = root.join("p").join(SID).join("subagents/team");
+    fs::create_dir_all(&agents).unwrap();
+    fs::write(
+        agents.join("agent-a2.jsonl"),
+        message("a", "2026-11-20T10:00:00Z", "user")
+            + &message("b", "2026-11-20T10:01:00Z", "assistant"),
+    )
+    .unwrap();
+    let mut s = Store::open(&tmp.path().join("cache.db")).unwrap();
+    s.sync_claude(&root).unwrap();
+    let a = s.snapshot("UTC").unwrap();
+    assert_eq!(a.turns.len(), 1);
+    assert_eq!(
+        a.turns[0]
+            .details
+            .as_ref()
+            .unwrap()
+            .parent_session_id
+            .as_deref(),
+        Some(format!("claude:{SID}").as_str())
+    );
+    assert_eq!(a.days[0].elapsed_ms, 60000);
+}
