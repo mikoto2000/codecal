@@ -28,6 +28,12 @@ import {
   summarizeDays,
 } from "./calendar";
 import type { Config, Project, Snapshot, Turn } from "./types";
+const sourceLabel = (turn: Turn) =>
+  turn.source === "claude"
+    ? "Claude Code"
+    : turn.source === "rei"
+      ? "れい"
+      : "Codex";
 const empty: Snapshot = {
   projects: [],
   turns: [],
@@ -187,7 +193,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
         zoneRef.current = b.config.timezone;
         setDbPath(b.db_path);
         setNotice(
-          `解析対象: Codex ${b.config.log_root}${b.config.rei_enabled ? ` / れい ${b.config.rei_root}` : ""}  ·  保存先: ${b.db_path}`,
+          `解析対象: Codex ${b.config.log_root}${b.config.claude_enabled ? ` / Claude Code ${b.config.claude_root}` : ""}${b.config.rei_enabled ? ` / れい ${b.config.rei_root}` : ""}  ·  保存先: ${b.db_path}`,
         );
         await reload(b.config.timezone);
         if (alive) {
@@ -334,6 +340,8 @@ export default function App({ initialDate }: { initialDate?: string }) {
     const sourceChanged =
       !config ||
       draft.log_root !== config.log_root ||
+      draft.claude_enabled !== config.claude_enabled ||
+      (draft.claude_enabled && draft.claude_root !== config.claude_root) ||
       draft.rei_enabled !== config.rei_enabled ||
       (draft.rei_enabled && draft.rei_root !== config.rei_root);
     setSettingsError("");
@@ -350,7 +358,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
     }
     setConfig(draft);
     setNotice(
-      `解析対象: Codex ${draft.log_root}${draft.rei_enabled ? ` / れい ${draft.rei_root}` : ""}  ·  保存先: ${dbPath}`,
+      `解析対象: Codex ${draft.log_root}${draft.claude_enabled ? ` / Claude Code ${draft.claude_root}` : ""}${draft.rei_enabled ? ` / れい ${draft.rei_root}` : ""}  ·  保存先: ${dbPath}`,
     );
     zoneRef.current = draft.timezone;
     setSettingsWarning(warnings);
@@ -499,11 +507,17 @@ export default function App({ initialDate }: { initialDate?: string }) {
             </strong>
             <p>
               Codex: {config.log_root} · タイムゾーン: {config.timezone}
+              {config.claude_enabled && ` · Claude Code: ${config.claude_root}`}
               {config.rei_enabled && ` · れい: ${config.rei_root}`}
             </p>
             <p>
               ログの保存先が異なる場合は設定で変更できます。元のログは変更しません。
             </p>
+            {config.claude_enabled && (
+              <p>
+                Claude Code の履歴取り込みが有効です。設定で無効にできます。
+              </p>
+            )}
             {config.rei_enabled && (
               <p>
                 れいの履歴取り込みが有効です。不要な場合は設定で無効にできます。
@@ -803,6 +817,15 @@ export default function App({ initialDate }: { initialDate?: string }) {
                             >
                               <strong>
                                 {p?.name ?? "Unknown"}
+                                <small>
+                                  {" "}
+                                  ·{" "}
+                                  {[
+                                    ...new Set(
+                                      g.members.map((m) => sourceLabel(m.turn)),
+                                    ),
+                                  ].join(" / ")}
+                                </small>
                                 {multiple && ` · ${g.members.length}ターン`}
                               </strong>
                               <span>
@@ -963,6 +986,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
                     : localDate(m.end, zone).toFormat("HH:mm")}{" "}
                   · {statusLabel[m.turn.status]}
                 </span>
+                <small>{sourceLabel(m.turn)}</small>
                 <strong>{m.turn.prompt || "依頼内容なし"}</strong>
               </button>
             ))}
@@ -991,8 +1015,20 @@ export default function App({ initialDate }: { initialDate?: string }) {
           )}
           <span className="status-pill">{statusLabel[selected.status]}</span>
           <dl>
+            {selected.details?.git_branch && (
+              <>
+                <dt>Git ブランチ</dt>
+                <dd>{selected.details.git_branch}</dd>
+              </>
+            )}
+            {selected.details?.parent_session_id && (
+              <>
+                <dt>親セッション</dt>
+                <dd>{selected.details.parent_session_id}</dd>
+              </>
+            )}
             <dt>取得元</dt>
-            <dd>{selected.source === "rei" ? "れい" : "Codex"}</dd>
+            <dd>{sourceLabel(selected)}</dd>
             <dt>作業ディレクトリ</dt>
             <dd>{projects.get(selected.project_id)?.cwd}</dd>
             <dt>開始日時</dt>
@@ -1026,7 +1062,10 @@ export default function App({ initialDate }: { initialDate?: string }) {
             <dt>トークン使用量</dt>
             <dd>{selected.tokens?.toLocaleString() ?? "取得できません"}</dd>
           </dl>
-          <h3>{selected.source === "rei" ? "れい" : "Codex"} への依頼</h3>
+          <h3>
+            {sourceLabel(selected)}{" "}
+            {selected.source === "claude" ? "の活動内容" : "への依頼"}
+          </h3>
           <pre className="prompt">
             {selected.prompt || "依頼内容を取得できません"}
           </pre>
@@ -1072,6 +1111,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
                 <span>
                   {projects.get(t.project_id)?.name} · {statusLabel[t.status]}
                 </span>
+                <small>{sourceLabel(t)}</small>
                 <strong>{t.prompt || "依頼内容なし"}</strong>
               </button>
             ))}
@@ -1127,6 +1167,30 @@ export default function App({ initialDate }: { initialDate?: string }) {
             <p className="hint">
               sessions と archived_sessions を含む Codex
               ホームを指定してください。保存先: {dbPath}
+            </p>
+            <label className="inline-check">
+              <input
+                type="checkbox"
+                checked={draft.claude_enabled ?? false}
+                onChange={(e) =>
+                  setDraft({ ...draft, claude_enabled: e.target.checked })
+                }
+              />
+              Claude Code の履歴を取り込む
+            </label>
+            <label>
+              Claude Code projects ディレクトリ
+              <input
+                value={draft.claude_root ?? ""}
+                disabled={!draft.claude_enabled}
+                onChange={(e) =>
+                  setDraft({ ...draft, claude_root: e.target.value })
+                }
+              />
+            </label>
+            <p className="hint">
+              ~/.claude/projects または CLAUDE_CONFIG_DIR 配下の projects
+              を指定します。会話本文・ツール入出力は保存しません。
             </p>
             <label className="inline-check">
               <input

@@ -33,6 +33,7 @@ async function launch() {
     env: {
       ...globalThis.process.env,
       CODEX_HOME: logs,
+      CLAUDE_CONFIG_DIR: path.join(root, "unused-claude"),
       REI_DATA_DIR: path.join(root, "rei"),
       APPDATA: appdata,
       CODECAL_DATA_DIR: appdata,
