@@ -784,6 +784,11 @@ export default function App({ initialDate }: { initialDate?: string }) {
                             })),
                         ).map((g) => {
                           const p = projects.get(g.project_id);
+                          const sources = [
+                            ...new Set(
+                              g.members.map((m) => sourceLabel(m.turn)),
+                            ),
+                          ].join(" / ");
                           const multiple = g.members.length > 1;
                           const states = Object.entries(g.statuses)
                             .map(
@@ -803,8 +808,8 @@ export default function App({ initialDate }: { initialDate?: string }) {
                               key={g.id}
                               className={`activity-block ${g.unknown ? "unknown" : ""} ${multiple ? "grouped" : ""}`}
                               data-turn-count={g.members.length}
-                              aria-label={`${p?.name} ${times} ${details}`}
-                              title={`${p?.name}\n${times}\n${details}\n${prompt.slice(0, 240)}`}
+                              aria-label={`${p?.name} ${times} ${details} · ${sources}`}
+                              title={`${p?.name} · ${sources}\n${times}\n${details}\n${prompt.slice(0, 240)}`}
                               style={{
                                 top: g.top,
                                 height: g.height,
@@ -817,15 +822,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
                             >
                               <strong>
                                 {p?.name ?? "Unknown"}
-                                <small>
-                                  {" "}
-                                  ·{" "}
-                                  {[
-                                    ...new Set(
-                                      g.members.map((m) => sourceLabel(m.turn)),
-                                    ),
-                                  ].join(" / ")}
-                                </small>
+                                <small> · {sources}</small>
                                 {multiple && ` · ${g.members.length}ターン`}
                               </strong>
                               <span>

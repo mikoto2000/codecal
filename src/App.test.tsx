@@ -754,6 +754,11 @@ it("shows Claude source in timeline and details and saves import settings", asyn
   await mount();
   const block = screen.getByRole("button", { name: /Sample project.*10:00/ });
   expect(block).toHaveTextContent("Claude Code");
+  expect(block).toHaveAccessibleName(/Claude Code/);
+  expect(block).toHaveAttribute(
+    "title",
+    expect.stringContaining("Claude Code"),
+  );
   fireEvent.click(block);
   expect(screen.getByRole("dialog")).toHaveTextContent("Claude Code");
   fireEvent.click(screen.getByRole("button", { name: "閉じる" }));
