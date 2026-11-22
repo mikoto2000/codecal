@@ -27,7 +27,7 @@ let page: Page;
 const event = (type: string, payload: unknown, timestamp: string) =>
   JSON.stringify({ type, payload, timestamp }) + "\n";
 const start = "2026-11-20T01:00:00Z";
-async function launch() {
+async function launch(waitForReady = true) {
   process = spawn(exe, [], {
     windowsHide: true,
     env: {
@@ -74,6 +74,7 @@ async function launch() {
     .toBeGreaterThan(0);
   page = browser.contexts().flatMap((c) => c.pages())[0];
   await page.waitForLoadState("domcontentloaded");
+  if (!waitForReady) return;
   // Fixture times and labels use Japan time; CI runners usually use UTC.
   await page.getByRole("button", { name: "設定", exact: true }).click();
   await page.getByLabel("タイムゾーン", { exact: true }).fill("Asia/Tokyo");
@@ -704,6 +705,73 @@ test("database startup migrates v2 with backup and reopens compatible legacy v3"
     } finally {
       reopened.close();
     }
+  } finally {
+    await stop();
+  }
+});
+test("migration startup shows an animated status while SQLite is busy", async () => {
+  test.setTimeout(90000);
+  mkdirSync(path.join(logs, "sessions"), { recursive: true });
+  mkdirSync(appdata, { recursive: true });
+  await launch();
+  await stop();
+  const db = new DatabaseSync(path.join(appdata, "codecal.db"));
+  db.exec(
+    "DELETE FROM schema_migrations WHERE version>2; PRAGMA user_version=2; BEGIN IMMEDIATE;",
+  );
+  let locked = true;
+  try {
+    await launch(false);
+    const status = page.getByRole("status");
+    await expect(status).toHaveText("CodeCal がデータベースを移行しています…");
+    await expect(status.locator(".spinner")).toBeVisible();
+    const frames = await page.evaluate(
+      () =>
+        new Promise<number>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(2))),
+        ),
+    );
+    expect(frames).toBe(2);
+    await page.screenshot({ path: "test-results/migration-progress.png" });
+    db.exec("ROLLBACK;");
+    locked = false;
+    await expect(
+      page.getByRole("button", { name: "設定", exact: true }),
+    ).toBeEnabled();
+    await expect(
+      page.getByText("CodeCal がデータベースを移行しています…"),
+    ).not.toBeVisible();
+  } finally {
+    if (locked) db.exec("ROLLBACK;");
+    db.close();
+    await stop();
+  }
+});
+
+test("database startup failures stop the spinner and allow retry", async () => {
+  test.setTimeout(90000);
+  mkdirSync(path.join(logs, "sessions"), { recursive: true });
+  mkdirSync(appdata, { recursive: true });
+  await launch();
+  await stop();
+  const dbPath = path.join(appdata, "codecal.db");
+  const failed = new DatabaseSync(dbPath);
+  failed.exec("PRAGMA user_version=99;");
+  failed.close();
+  try {
+    await launch(false);
+    await expect(page.getByRole("alert")).toContainText(
+      "CodeCal がデータベースを準備できませんでした",
+    );
+    await expect(page.locator(".startup-screen .spinner")).toHaveCount(0);
+    const repaired = new DatabaseSync(dbPath);
+    repaired.exec("PRAGMA user_version=3;");
+    repaired.close();
+    await page.getByRole("button", { name: "再試行", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "設定", exact: true }),
+    ).toBeEnabled();
+    await expect(page.locator(".startup-screen")).toHaveCount(0);
   } finally {
     await stop();
   }

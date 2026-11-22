@@ -228,7 +228,9 @@ it("distinguishes a period with no activity from an empty import", async () => {
 it("shows loading state", () => {
   vi.mocked(api.boot).mockReturnValue(new Promise(() => {}));
   render(<App />);
-  expect(screen.getByRole("status")).toHaveTextContent("読み込み中");
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "CodeCal がデータベースを確認しています…",
+  );
 });
 it("shows recoverable backend errors", async () => {
   vi.mocked(api.boot).mockRejectedValue(new Error("synthetic error"));
@@ -776,4 +778,45 @@ it("shows Claude source in timeline and details and saves import settings", asyn
       }),
     ),
   );
+});
+it("shows a spinner and migration status until startup completes", async () => {
+  let finish!: (value: Awaited<ReturnType<typeof api.boot>>) => void;
+  const boot = await api.boot();
+  vi.mocked(api.boot).mockReturnValue(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  render(<App initialDate="2026-11-20" />);
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "CodeCal がデータベースを確認しています…",
+  );
+  expect(
+    screen.getByRole("status").querySelector(".spinner"),
+  ).toBeInTheDocument();
+  await waitFor(() => expect(finish).toBeDefined());
+  const onStartup = vi.mocked(api.events).mock.calls[0][3];
+  act(() => onStartup?.("migrating"));
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "CodeCal がデータベースを移行しています…",
+  );
+  await act(async () => finish(boot));
+  await screen.findByRole("button", { name: /Sample project.*10:00/ });
+  expect(
+    screen.queryByText("CodeCal がデータベースを移行しています…"),
+  ).not.toBeInTheDocument();
+});
+it("stops the startup spinner on failure and retries database initialization", async () => {
+  vi.mocked(api.boot).mockRejectedValueOnce(
+    new Error("synthetic migration failure"),
+  );
+  render(<App initialDate="2026-11-20" />);
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "synthetic migration failure",
+  );
+  expect(
+    document.querySelector(".startup-screen .spinner"),
+  ).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "再試行" }));
+  await screen.findByRole("button", { name: /Sample project.*10:00/ });
 });
