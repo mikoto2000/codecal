@@ -37,11 +37,13 @@ jobs:
           ref: refs/tags/${{ inputs.tag || github.ref_name }}
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 24.22.1
           cache: npm
       - name: Validate tag and prepare six build targets
         id: plan
         run: node scripts/release.mjs plan
+      - name: Install pinned npm
+        run: npm install --global npm@11.19.1
       - name: Install locked dependencies from public npm
         run: npm ci --registry=https://registry.npmjs.org/
       - run: npm run typecheck
@@ -65,9 +67,9 @@ jobs:
           ref: refs/tags/${{ inputs.tag || github.ref_name }}
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 24.22.1
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: ${{ matrix.target }}
       - name: Install Linux build and bundle dependencies
@@ -77,6 +79,8 @@ jobs:
           sudo apt-get install -y build-essential file libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libxdo-dev libssl-dev librsvg2-dev patchelf libfuse2
       - name: Apply tag version to npm, Cargo and Tauri
         run: node scripts/release.mjs version
+      - name: Install pinned npm
+        run: npm install --global npm@11.19.1
       - name: Install locked dependencies from public npm
         run: npm ci --registry=https://registry.npmjs.org/
       - name: Test native Rust core
@@ -119,7 +123,7 @@ jobs:
           ref: refs/tags/${{ inputs.tag || github.ref_name }}
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 24.22.1
       - uses: actions/download-artifact@v8
         with:
           pattern: release-*
