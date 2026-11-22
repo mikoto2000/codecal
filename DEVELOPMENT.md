@@ -127,3 +127,9 @@ node scripts/create-sample.mjs
 - [データベース](docs/database-schema.md)
 - [テスト・検証](docs/testing.md)
 - [初期開発の検証記録](docs/delivery-report.md)
+
+## Claude Code ログ
+
+Claude Code の対応内容、時間推定、SDK調査、安全性の判断は [調査記録](docs/claude-logs.md) を参照してください。**実環境での動作未検証** です。
+
+実ログと隔離する場合は `CLAUDE_CONFIG_DIR` を専用の空ディレクトリに向けてから起動します。その `projects` がなければ既定で無効です。ネイティブE2Eも専用パスだけを参照します。

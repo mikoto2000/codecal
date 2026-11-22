@@ -174,6 +174,7 @@ fn parse(raw: &str, project: &str, projects: &Projects) -> Result<Option<Record>
         id: text(&v, "id").ok_or("missing event id")?,
         project: project.into(),
         event: Event {
+            details: None,
             source: Some("rei".into()),
             project_name: Some(name),
             native_session_id: text(&v, "sessionId"),

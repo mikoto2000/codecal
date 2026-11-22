@@ -1,6 +1,10 @@
 export type Project = { id: string; cwd: string; name: string; color: string };
 export type Turn = {
-  source?: "codex" | "rei";
+  source?: "codex" | "rei" | "claude";
+  details?: {
+    parent_session_id: string | null;
+    git_branch: string | null;
+  } | null;
   native_session_id?: string | null;
   native_turn_id?: string | null;
   id: string;
@@ -28,6 +32,8 @@ export type Snapshot = {
 };
 export type Config = {
   log_root: string;
+  claude_enabled?: boolean;
+  claude_root?: string;
   rei_enabled: boolean;
   rei_root: string;
   timezone: string;

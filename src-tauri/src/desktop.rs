@@ -9,6 +9,10 @@ use tauri::{Emitter, Manager, State};
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
     pub log_root: String,
+    #[serde(default = "default_claude_enabled")]
+    pub claude_enabled: bool,
+    #[serde(default = "default_claude_root")]
+    pub claude_root: String,
     #[serde(default = "default_rei_enabled")]
     pub rei_enabled: bool,
     #[serde(default = "default_rei_root")]
@@ -19,6 +23,12 @@ pub struct Config {
     #[serde(deserialize_with = "read_thresholds")]
     pub thresholds: [f64; 3],
     pub auto_refresh: bool,
+}
+fn default_claude_root() -> String {
+    crate::claude::default_root().display().to_string()
+}
+fn default_claude_enabled() -> bool {
+    crate::claude::default_root().is_dir()
 }
 fn default_rei_root() -> String {
     crate::rei::default_root().display().to_string()
@@ -62,6 +72,8 @@ mod tests {
     #[test]
     fn old_configuration_gets_rei_defaults_and_keeps_existing_preferences() {
         let c: Config = serde_json::from_str(r#"{"log_root":"/logs","timezone":"Asia/Tokyo","week_start":0,"theme":"dark","thresholds":[1,3,6],"auto_refresh":false}"#).unwrap();
+        assert_eq!(c.claude_root, default_claude_root());
+        assert_eq!(c.claude_enabled, default_claude_enabled());
         assert_eq!(c.rei_root, default_rei_root());
         assert_eq!(c.rei_enabled, default_rei_enabled());
         assert_eq!(c.timezone, "Asia/Tokyo");
@@ -73,6 +85,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut c = Config {
             log_root: tmp.path().display().to_string(),
+            claude_enabled: false,
             rei_enabled: false,
             rei_root: tmp.path().join("missing-rei").display().to_string(),
             ..Config::default()
@@ -108,6 +121,8 @@ fn read_thresholds<'de, D: serde::Deserializer<'de>>(
 impl Default for Config {
     fn default() -> Self {
         Self {
+            claude_enabled: default_claude_enabled(),
+            claude_root: default_claude_root(),
             rei_enabled: default_rei_enabled(),
             rei_root: default_rei_root(),
             log_root: std::env::var("CODEX_HOME").unwrap_or_else(|_| {
@@ -177,6 +192,7 @@ fn log_root_warnings(value: &Config) -> Vec<String> {
     for (source, root, enabled) in [
         ("Codex", &value.log_root, true),
         ("れい", &value.rei_root, value.rei_enabled),
+        ("Claude Code", &value.claude_root, value.claude_enabled),
     ] {
         if enabled && !std::path::Path::new(root).is_dir() {
             warnings.push(format!(
@@ -217,7 +233,10 @@ fn validate_config(value: &Config) -> Result<(), String> {
     {
         return Err("ヒートマップのしきい値は正の数を昇順で指定してください".into());
     }
-    if value.log_root.trim().is_empty() || (value.rei_enabled && value.rei_root.trim().is_empty()) {
+    if value.log_root.trim().is_empty()
+        || (value.rei_enabled && value.rei_root.trim().is_empty())
+        || (value.claude_enabled && value.claude_root.trim().is_empty())
+    {
         return Err("ログディレクトリを指定してください".into());
     }
     Ok(())
@@ -239,9 +258,11 @@ fn sync_app(app: &tauri::AppHandle) -> Result<Progress, String> {
     let mut store = state.store.lock().map_err(|e| e.to_string())?;
     let c = config(&store)?;
     let rei_root = PathBuf::from(c.rei_root);
-    let result = store.sync_sources(
+    let claude_root = PathBuf::from(c.claude_root);
+    let result = store.sync_all_sources(
         &PathBuf::from(c.log_root),
         c.rei_enabled.then_some(rei_root.as_path()),
+        c.claude_enabled.then_some(claude_root.as_path()),
         |done, total| {
             let _ = app.emit(
                 "sync-progress",
@@ -381,6 +402,9 @@ pub fn run() {
                     let mut roots = vec![c.log_root];
                     if c.rei_enabled && !roots.contains(&c.rei_root) {
                         roots.push(c.rei_root);
+                    }
+                    if c.claude_enabled && !roots.contains(&c.claude_root) {
+                        roots.push(c.claude_root);
                     }
                     if roots != watching {
                         if let Some(w) = watcher.as_mut() {
