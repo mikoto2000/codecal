@@ -187,6 +187,7 @@ pub(crate) fn discover(root: &Path) -> Result<(Vec<PathBuf>, Vec<String>), Strin
     let root = root
         .canonicalize()
         .map_err(|_| "unreadable Claude Code projects directory")?;
+    let rejected_links = std::cell::Cell::new(0usize);
     let mut files = vec![];
     let mut warnings = vec![];
     for entry in walkdir::WalkDir::new(&root)
@@ -194,7 +195,16 @@ pub(crate) fn discover(root: &Path) -> Result<(Vec<PathBuf>, Vec<String>), Strin
         .follow_links(false)
         .follow_root_links(false)
         .into_iter()
-        .filter_entry(|e| std::fs::symlink_metadata(e.path()).is_ok_and(|m| !linked(&m)))
+        .filter_entry(|e| {
+            std::fs::symlink_metadata(e.path()).is_ok_and(|m| {
+                if linked(&m) {
+                    rejected_links.set(rejected_links.get() + 1);
+                    false
+                } else {
+                    true
+                }
+            })
+        })
     {
         let entry = match entry {
             Ok(e) => e,
@@ -230,6 +240,12 @@ pub(crate) fn discover(root: &Path) -> Result<(Vec<PathBuf>, Vec<String>), Strin
             continue;
         }
         files.push(entry.into_path());
+    }
+    if rejected_links.get() > 0 {
+        warnings.push(format!(
+            "Claude Code: {} linked paths rejected",
+            rejected_links.get()
+        ));
     }
     Ok((files, warnings))
 }

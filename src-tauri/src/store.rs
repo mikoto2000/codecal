@@ -35,6 +35,7 @@ pub struct Project {
 }
 #[derive(Serialize)]
 pub struct Turn {
+    pub details: Option<crate::parser::SessionDetails>,
     pub source: String,
     pub native_session_id: Option<String>,
     pub native_turn_id: Option<String>,
@@ -192,6 +193,31 @@ impl Store {
                 Err(e) => {
                     self.rei_diagnostic(root, Some(&e))?;
                     result.warnings.push(format!("れい: {e}"));
+                }
+            }
+        }
+        progress(result.files, result.files);
+        Ok(result)
+    }
+    pub fn sync_all_sources(
+        &mut self,
+        codex: &Path,
+        rei: Option<&Path>,
+        claude: Option<&Path>,
+        progress: impl Fn(usize, usize),
+    ) -> Result<Progress, String> {
+        let mut result = self.sync_sources(codex, rei, &progress)?;
+        if let Some(root) = claude {
+            match self.sync_claude(root) {
+                Ok(p) => {
+                    result.files += p.files;
+                    result.bytes_read += p.bytes_read;
+                    self.rei_diagnostic(root, if p.warnings.is_empty() { None } else { Some("Claude Code: transcript discovery warnings; check selected projects directory") })?;
+                    result.warnings.extend(p.warnings);
+                }
+                Err(e) => {
+                    self.rei_diagnostic(root, Some(&e))?;
+                    result.warnings.push(format!("Claude Code: {e}"));
                 }
             }
         }
@@ -477,6 +503,7 @@ impl Store {
                 let id = format!("{sid}:{tid}");
                 active.insert(sid.clone(), tid.clone());
                 turns.entry(id.clone()).or_insert(Turn {
+                    details: e.details,
                     source: e.source.unwrap_or_else(|| "codex".into()),
                     native_session_id: e.native_session_id,
                     native_turn_id: e.native_turn_id,
@@ -573,10 +600,13 @@ impl Store {
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
-        let mut q=self.conn.prepare("SELECT id,session_id,turn_id,project_id,start,end,status,prompt,tokens,source,native_session_id,native_turn_id FROM turns ORDER BY start").map_err(err)?;
+        let mut q=self.conn.prepare("SELECT id,session_id,turn_id,project_id,start,end,status,prompt,tokens,source,native_session_id,native_turn_id,CASE WHEN source='claude' THEN (SELECT json_extract(event,'$.details') FROM events e WHERE e.session_id=turns.session_id AND json_extract(event,'$.turn_id')=turns.turn_id LIMIT 1) ELSE NULL END FROM turns ORDER BY start").map_err(err)?;
         let turns = q
             .query_map([], |r| {
                 Ok(Turn {
+                    details: r
+                        .get::<_, Option<String>>(12)?
+                        .and_then(|s| serde_json::from_str(&s).ok()),
                     source: r.get(9)?,
                     native_session_id: r.get(10)?,
                     native_turn_id: r.get(11)?,
@@ -737,6 +767,7 @@ fn read_delta(path: &Path, previous: Option<&Cursor>, claude: bool) -> Result<De
         if buf.last() != Some(&b'\n') {
             if n > 1048576 {
                 let mut discard = vec![];
+                let mut terminated = false;
                 loop {
                     discard.clear();
                     let n = (&mut reader)
@@ -744,9 +775,17 @@ fn read_delta(path: &Path, previous: Option<&Cursor>, claude: bool) -> Result<De
                         .read_until(b'\n', &mut discard)
                         .map_err(err)?;
                     offset += n as u64;
-                    if n == 0 || discard.last() == Some(&b'\n') {
+                    if discard.last() == Some(&b'\n') {
+                        terminated = true;
                         break;
                     }
+                    if n == 0 {
+                        break;
+                    }
+                }
+                if !terminated {
+                    offset = before;
+                    break;
                 }
                 offset += buf.len() as u64;
                 line += 1;
