@@ -152,3 +152,115 @@ fn valid_cwd(s: &str) -> bool {
             || (p.as_bytes().get(1) == Some(&b':') && p.as_bytes().get(2) == Some(&b'/')))
         && !p.split('/').any(|s| s == ".." || s == ".")
 }
+
+fn linked(meta: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        // Includes junctions and other reparse points, not just symlinks.
+        meta.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        meta.is_symlink()
+    }
+}
+
+pub(crate) fn validate_file(path: &Path) -> Result<(), String> {
+    for ancestor in path.ancestors().take(5) {
+        if linked(&std::fs::symlink_metadata(ancestor).map_err(|_| "unreadable transcript path")?) {
+            return Err("linked transcript path rejected".into());
+        }
+    }
+    if !path.is_file() {
+        return Err("not a transcript file".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn discover(root: &Path) -> Result<(Vec<PathBuf>, Vec<String>), String> {
+    let meta = std::fs::symlink_metadata(root)
+        .map_err(|_| "Claude Code ログディレクトリが見つかりません")?;
+    if !meta.is_dir() || linked(&meta) {
+        return Err("Claude Code projects must be an unlinked directory".into());
+    }
+    let root = root
+        .canonicalize()
+        .map_err(|_| "unreadable Claude Code projects directory")?;
+    let mut files = vec![];
+    let mut warnings = vec![];
+    for entry in walkdir::WalkDir::new(&root)
+        .max_depth(4)
+        .follow_links(false)
+        .follow_root_links(false)
+        .into_iter()
+        .filter_entry(|e| std::fs::symlink_metadata(e.path()).is_ok_and(|m| !linked(&m)))
+    {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => {
+                if warnings.len() < 20 {
+                    warnings.push("Claude Code: unreadable transcript directory".into());
+                }
+                continue;
+            }
+        };
+        if !entry.file_type().is_file() || entry.path().extension().is_none_or(|s| s != "jsonl") {
+            continue;
+        }
+        let relative = entry
+            .path()
+            .strip_prefix(&root)
+            .map_err(|_| "transcript outside root")?;
+        let depth = relative.components().count();
+        let main = depth == 2
+            && relative
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .is_some_and(uuid);
+        let child = depth == 4
+            && relative
+                .parent()
+                .and_then(Path::file_name)
+                .is_some_and(|s| s == "subagents");
+        if !(main || child) || session_key(relative).is_err() {
+            if warnings.len() < 20 {
+                warnings.push("Claude Code: invalid transcript path skipped".into());
+            }
+            continue;
+        }
+        files.push(entry.into_path());
+    }
+    Ok((files, warnings))
+}
+
+/// Claude transcripts have message timestamps rather than explicit run ends.
+/// Convert adjacent activity (at most five minutes apart) into the existing
+/// lifecycle model. A text answer is an endpoint; user thinking time is excluded.
+/// The common aggregate still computes both union and summed durations.
+pub(crate) fn activity_events(events: Vec<(String, String, Event)>) -> Vec<(String, Event)> {
+    let mut previous: std::collections::BTreeMap<String, Event> = std::collections::BTreeMap::new();
+    let mut result = vec![];
+    for (_, sid, e) in events {
+        if e.source.as_deref() != Some("claude") {
+            result.push((sid, e));
+            continue;
+        }
+        if let Some(p) = previous.remove(&sid) {
+            if e.timestamp >= p.timestamp && e.timestamp - p.timestamp <= 300_000 {
+                let mut end = p;
+                end.timestamp = e.timestamp;
+                end.kind = "completed".into();
+                result.push((sid.clone(), end));
+            }
+        }
+        if e.text.as_deref() == Some("アシスタント応答") {
+            continue;
+        }
+        let mut start = e.clone();
+        start.kind = "start".into();
+        result.push((sid.clone(), start));
+        previous.insert(sid, e);
+    }
+    result
+}

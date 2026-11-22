@@ -246,6 +246,20 @@ impl Store {
                 _ => {}
             }
         }
+        self.sync_files(files, warnings, progress, false)
+    }
+    pub fn sync_claude(&mut self, root: &Path) -> Result<Progress, String> {
+        let (files, warnings) = crate::claude::discover(root)?;
+        self.sync_files(files, warnings, |_, _| {}, true)
+    }
+    fn sync_files(
+        &mut self,
+        mut files: Vec<PathBuf>,
+        mut warnings: Vec<String>,
+        progress: impl Fn(usize, usize),
+        claude: bool,
+    ) -> Result<Progress, String> {
+        let label = if claude { "Claude Code" } else { "Codex" };
         files.sort();
         let mut bytes_read = 0;
         let total = files.len();
@@ -324,13 +338,13 @@ impl Store {
         for (batch_index, batch) in files.chunks(4).enumerate() {
             let deltas: Vec<_> = batch
                 .par_iter()
-                .map(|p| read_delta(p, cursors.get(&p.display().to_string())))
+                .map(|p| read_delta(p, cursors.get(&p.display().to_string()), claude))
                 .collect();
             for (p, result) in batch.iter().zip(deltas) {
                 let d = match result {
                     Ok(d) => d,
                     Err(e) => {
-                        warnings.push(format!("Codex: {}: {e}", p.display()));
+                        warnings.push(format!("{label}: {}: {e}", p.display()));
                         self.conn
                             .execute(
                                 "INSERT OR REPLACE INTO diagnostics VALUES(?,?)",
@@ -438,7 +452,7 @@ impl Store {
         let mut active: BTreeMap<String, String> = BTreeMap::new();
         let mut turns: BTreeMap<String, Turn> = BTreeMap::new();
         let mut pending: BTreeMap<String, String> = BTreeMap::new();
-        for (_, sid, e) in events {
+        for (sid, e) in crate::claude::activity_events(events) {
             let dir = cwd.entry(sid.clone()).or_insert_with(|| "(unknown)".into());
             if let Some(d) = &e.cwd {
                 *dir = normalize_path(d);
@@ -617,6 +631,20 @@ impl Store {
         })
     }
     pub fn source_excerpt(&self, turn_id: &str) -> Result<String, String> {
+        let source: String = self
+            .conn
+            .query_row("SELECT source FROM turns WHERE id=?", [turn_id], |r| {
+                r.get(0)
+            })
+            .map_err(err)?;
+        if source == "claude" {
+            let (path, event): (String, String) = self.conn.query_row(
+                "SELECT es.path,e.event FROM events e JOIN event_sources es ON es.event_id=e.id JOIN turns t ON t.session_id=e.session_id WHERE t.id=? AND json_extract(e.event,'$.turn_id')=t.turn_id LIMIT 1",
+                [turn_id], |r| Ok((r.get(0)?,r.get(1)?))).map_err(err)?;
+            return Ok(format!(
+                "{path}\n{event}\n会話本文・ツール入出力は保存していません"
+            ));
+        }
         if let Some(excerpt) = self.rei_excerpt(turn_id)? {
             return Ok(excerpt);
         }
@@ -648,10 +676,16 @@ fn file_identity(meta: &std::fs::Metadata) -> String {
         meta.len()
     )
 }
-fn read_delta(path: &Path, previous: Option<&Cursor>) -> Result<Delta, String> {
+fn read_delta(path: &Path, previous: Option<&Cursor>, claude: bool) -> Result<Delta, String> {
+    if claude {
+        crate::claude::validate_file(path)?;
+    }
     let file = File::open(path).map_err(err)?;
     let meta = file.metadata().map_err(err)?;
     let len = meta.len();
+    if claude && len > 256 * 1024 * 1024 {
+        return Err("transcript exceeds 256 MiB limit".into());
+    }
     let identity = file_identity(&meta);
     let mut reader = BufReader::new(file);
     let old_head_len = previous.map_or(0, |c| c.head_len);
@@ -687,7 +721,12 @@ fn read_delta(path: &Path, previous: Option<&Cursor>) -> Result<Delta, String> {
     } else {
         previous.map_or(String::new(), |c| c.session.clone())
     };
+    // Read a stable-length snapshot; appends are picked up next time.
+    let mut reader = reader.take(len - offset);
     loop {
+        if claude && (offset - start_offset >= 8 * 1024 * 1024 || events.len() >= 10000) {
+            break;
+        }
         let before = offset;
         let mut buf = Vec::new();
         let mut limited = (&mut reader).take(1048577);
@@ -722,8 +761,13 @@ fn read_delta(path: &Path, previous: Option<&Cursor>) -> Result<Delta, String> {
         line += 1;
         match std::str::from_utf8(&buf)
             .map_err(|_| "invalid UTF-8".to_string())
-            .and_then(parse_line)
-        {
+            .and_then(|raw| {
+                if claude {
+                    crate::claude::parse_line(raw, path)
+                } else {
+                    parse_line(raw)
+                }
+            }) {
             Ok(Some(e)) => {
                 if let Some(s) = &e.session_id {
                     session = s.clone();
