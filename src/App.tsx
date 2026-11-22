@@ -135,6 +135,10 @@ export default function App({ initialDate }: { initialDate?: string }) {
     [error, setError] = useState(""),
     [progress, setProgress] = useState(""),
     [notice, setNotice] = useState("");
+  const [startupPhase, setStartupPhase] = useState<"checking" | "migrating">(
+    "checking",
+  );
+  const [bootAttempt, setBootAttempt] = useState(0);
   const [firstRun, setFirstRun] = useState(false);
   const [copyStatus, setCopyStatus] = useState("");
   const [copyFailed, setCopyFailed] = useState(false);
@@ -183,9 +187,34 @@ export default function App({ initialDate }: { initialDate?: string }) {
   useEffect(() => {
     let alive = true;
     let off: (() => void) | undefined;
-    void api
-      .boot()
-      .then(async (b) => {
+    const initialize = async () => {
+      try {
+        const unsubscribe = await api.events(
+          () => {
+            if (alive)
+              void reload(zoneRef.current).catch((e) => setError(String(e)));
+          },
+          (value) => {
+            if (alive) setProgress(value);
+          },
+          (value) => {
+            if (alive) setError(value);
+          },
+          (phase) => {
+            if (alive) setStartupPhase(phase);
+          },
+        );
+        if (!alive) {
+          unsubscribe();
+          return;
+        }
+        off = unsubscribe;
+        // Paint the startup screen before starting the database worker.
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        );
+        if (!alive) return;
+        const b = await api.boot();
         if (!alive) return;
         setConfig(b.config);
         setFirstRun(b.first_run);
@@ -200,33 +229,21 @@ export default function App({ initialDate }: { initialDate?: string }) {
           setLoading(false);
           await synchronize();
         }
-      })
-      .catch((e) => {
+      } catch (e) {
         if (alive) {
           setError(String(e));
           setLoading(false);
         }
-      });
-    void api
-      .events(
-        () => {
-          void reload(zoneRef.current).catch((e) => setError(String(e)));
-        },
-        setProgress,
-        setError,
-      )
-      .then((f) => {
-        if (alive) off = f;
-        else f();
-      })
-      .catch(() => {});
+      }
+    };
+    void initialize();
     const timer = setInterval(() => setNow(Date.now()), 30000);
     return () => {
       alive = false;
       off?.();
       clearInterval(timer);
     };
-  }, [reload, synchronize]);
+  }, [reload, synchronize, bootAttempt]);
   useEffect(() => {
     document.documentElement.dataset.theme = config?.theme ?? "system";
   }, [config?.theme]);
@@ -385,6 +402,39 @@ export default function App({ initialDate }: { initialDate?: string }) {
   const daySummary = selectedDay
     ? summarizeDays(activity, [selectedDay])
     : null;
+  if (!config) {
+    return (
+      <div className="startup-screen" aria-busy={loading}>
+        <h1>CodeCal</h1>
+        {loading ? (
+          <div className="startup-status" role="status">
+            <span className="spinner" aria-hidden="true" />
+            <p>
+              {startupPhase === "migrating"
+                ? "CodeCal がデータベースを移行しています…"
+                : "CodeCal がデータベースを確認しています…"}
+            </p>
+          </div>
+        ) : (
+          <>
+            <p role="alert">
+              CodeCal がデータベースを準備できませんでした。{error}
+            </p>
+            <button
+              onClick={() => {
+                setError("");
+                setLoading(true);
+                setStartupPhase("checking");
+                setBootAttempt((n) => n + 1);
+              }}
+            >
+              再試行
+            </button>
+          </>
+        )}
+      </div>
+    );
+  }
   return (
     <div className="app-shell">
       <aside className="sidebar">

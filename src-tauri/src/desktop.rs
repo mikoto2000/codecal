@@ -143,6 +143,11 @@ pub struct AppState {
     pub store: Mutex<Store>,
     pub db_path: String,
 }
+struct StartupContext {
+    local: PathBuf,
+    previous: PathBuf,
+    initialization: Mutex<()>,
+}
 #[derive(Serialize)]
 pub struct Bootstrap {
     config: Config,
@@ -157,16 +162,37 @@ fn config(store: &Store) -> Result<Config, String> {
         .unwrap_or_else(|| Ok(Config::default()))
 }
 #[tauri::command]
-pub async fn bootstrap(state: State<'_, AppState>, timezone: String) -> Result<Bootstrap, String> {
-    let store = state.store.lock().map_err(|e| e.to_string())?;
-    let (c, first_run, notices) = bootstrap_config(&store, timezone)?;
-    Ok(Bootstrap {
-        config: c,
-        db_path: state.db_path.clone(),
-        first_run,
-        notices,
+pub async fn bootstrap(app: tauri::AppHandle, timezone: String) -> Result<Bootstrap, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let startup = app.state::<StartupContext>();
+        // StrictMode and retries can invoke bootstrap more than once. Only one
+        // worker may prepare the database, and a successful Store is reused.
+        let initialization = startup.initialization.lock().map_err(|e| e.to_string())?;
+        if app.try_state::<AppState>().is_none() {
+            let path = crate::storage::prepare_database(&startup.local, &startup.previous)?;
+            let store = Store::open_with_progress(&path, || {
+                let _ = app.emit("startup-progress", "migrating");
+            })?;
+            app.manage(AppState {
+                store: Mutex::new(store),
+                db_path: path.display().to_string(),
+            });
+        }
+        drop(initialization);
+        let state = app.state::<AppState>();
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        let (c, first_run, notices) = bootstrap_config(&store, timezone)?;
+        Ok(Bootstrap {
+            config: c,
+            db_path: state.db_path.clone(),
+            first_run,
+            notices,
+        })
     })
+    .await
+    .map_err(|e| e.to_string())?
 }
+
 fn bootstrap_config(
     store: &Store,
     timezone: String,
@@ -244,7 +270,8 @@ fn validate_config(value: &Config) -> Result<(), String> {
 #[tauri::command]
 pub async fn snapshot(app: tauri::AppHandle, timezone: String) -> Result<Snapshot, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        app.state::<AppState>()
+        app.try_state::<AppState>()
+            .ok_or("CodeCal がデータベースを準備しています")?
             .store
             .lock()
             .map_err(|e| e.to_string())?
@@ -254,7 +281,9 @@ pub async fn snapshot(app: tauri::AppHandle, timezone: String) -> Result<Snapsho
     .map_err(|e| e.to_string())?
 }
 fn sync_app(app: &tauri::AppHandle) -> Result<Progress, String> {
-    let state = app.state::<AppState>();
+    let state = app
+        .try_state::<AppState>()
+        .ok_or("CodeCal がデータベースを準備しています")?;
     let mut store = state.store.lock().map_err(|e| e.to_string())?;
     let c = config(&store)?;
     let rei_root = PathBuf::from(c.rei_root);
@@ -302,7 +331,8 @@ pub async fn update_project(
 #[tauri::command]
 pub async fn source_excerpt(app: tauri::AppHandle, id: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        app.state::<AppState>()
+        app.try_state::<AppState>()
+            .ok_or("CodeCal がデータベースを準備しています")?
             .store
             .lock()
             .map_err(|e| e.to_string())?
@@ -314,18 +344,13 @@ pub async fn source_excerpt(app: tauri::AppHandle, id: String) -> Result<String,
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            let path = if let Some(dir) = std::env::var_os("CODECAL_DATA_DIR") {
-                let dir = PathBuf::from(dir);
-                crate::storage::prepare_database(&dir, &dir)
+            let (local, previous) = if let Some(dir) = std::env::var_os("CODECAL_DATA_DIR") {
+                let dir = std::path::absolute(PathBuf::from(dir))?;
+                (dir.clone(), dir)
             } else {
-                crate::storage::prepare_database(
-                    &app.path().app_local_data_dir()?,
-                    &app.path().app_data_dir()?,
-                )
-            }
-            .map_err(std::io::Error::other)?;
-            let store = Store::open(&path).map_err(std::io::Error::other)?;
-            let state_file = std::fs::canonicalize(&path)?.with_file_name("window-state.json");
+                (app.path().app_local_data_dir()?, app.path().app_data_dir()?)
+            };
+            let state_file = local.join("window-state.json");
             app.handle().plugin(
                 tauri_plugin_window_state::Builder::default()
                     .with_filename(state_file.to_string_lossy().into_owned())
@@ -338,9 +363,10 @@ pub fn run() {
                     .build(),
             )?;
 
-            app.manage(AppState {
-                store: Mutex::new(store),
-                db_path: path.display().to_string(),
+            app.manage(StartupContext {
+                local,
+                previous,
+                initialization: Mutex::new(()),
             });
             // Register window-state before creating the main window so its
             // ready callback restores geometry and installs event tracking.
@@ -393,7 +419,9 @@ pub fn run() {
                         }
                     }
                     let c = {
-                        let state = handle.state::<AppState>();
+                        let Some(state) = handle.try_state::<AppState>() else {
+                            continue;
+                        };
                         let Ok(store) = state.store.try_lock() else {
                             continue;
                         };

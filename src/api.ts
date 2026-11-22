@@ -19,6 +19,7 @@ export const api = {
     changed: () => void,
     progress: (s: string) => void,
     error: (s: string) => void,
+    startup: (phase: "migrating") => void = () => {},
   ) => {
     const offs = await Promise.all([
       listen("data-changed", changed),
@@ -26,6 +27,7 @@ export const api = {
         progress(`${e.payload.done} / ${e.payload.total} ファイル`),
       ),
       listen<string>("sync-error", (e) => error(e.payload)),
+      listen<"migrating">("startup-progress", (e) => startup(e.payload)),
     ]);
     return () => offs.forEach((off) => off());
   },
