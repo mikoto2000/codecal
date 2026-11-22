@@ -1,7 +1,14 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionDetails {
+    pub parent_session_id: Option<String>,
+    pub git_branch: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<SessionDetails>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -71,6 +78,7 @@ pub fn parse_line(line: &str) -> Result<Option<Event>, String> {
         None
     };
     Ok(Some(Event {
+        details: None,
         source: None,
         project_name: None,
         native_session_id: None,
