@@ -90,41 +90,8 @@ struct Cursor {
 }
 impl Store {
     pub fn open(path: &Path) -> Result<Self, String> {
-        let conn = Connection::open(path).map_err(err)?;
-        let version: i64 = conn
-            .pragma_query_value(None, "user_version", |r| r.get(0))
-            .map_err(err)?;
-        if version > 2 {
-            return Err("このデータベースは新しい CodeCal で作成されています".into());
-        }
-        conn.busy_timeout(std::time::Duration::from_secs(10))
-            .map_err(err)?;
-        conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;
-  CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY);
-  CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,cwd TEXT NOT NULL UNIQUE,name TEXT NOT NULL,color TEXT NOT NULL,last_seen INTEGER NOT NULL);
-  CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,project_id TEXT REFERENCES projects(id),start INTEGER,last_event INTEGER);
-  CREATE TABLE IF NOT EXISTS turns(id TEXT PRIMARY KEY,session_id TEXT NOT NULL REFERENCES sessions(id),turn_id TEXT NOT NULL,project_id TEXT NOT NULL REFERENCES projects(id),start INTEGER NOT NULL,end INTEGER,status TEXT NOT NULL,prompt TEXT NOT NULL,tokens INTEGER,UNIQUE(session_id,turn_id));
-  CREATE TABLE IF NOT EXISTS activity_intervals(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id),turn_id TEXT NOT NULL UNIQUE REFERENCES turns(id) ON DELETE CASCADE,start INTEGER NOT NULL,end INTEGER,status TEXT NOT NULL);
-  CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,ts INTEGER NOT NULL,event TEXT NOT NULL);
-  CREATE INDEX IF NOT EXISTS events_session ON events(session_id,ts);
-  CREATE TABLE IF NOT EXISTS event_sources(event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,path TEXT NOT NULL,offset INTEGER NOT NULL,line INTEGER NOT NULL,PRIMARY KEY(event_id,path));
-  CREATE TABLE IF NOT EXISTS sync_state(path TEXT PRIMARY KEY,offset INTEGER NOT NULL,line INTEGER NOT NULL,head TEXT NOT NULL,head_len INTEGER NOT NULL,identity TEXT NOT NULL,session_id TEXT NOT NULL,updated INTEGER NOT NULL);
-  CREATE TABLE IF NOT EXISTS diagnostics(path TEXT PRIMARY KEY,message TEXT NOT NULL);
-  CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-  INSERT OR IGNORE INTO schema_migrations VALUES(1);
-  ").map_err(err)?;
-        if version < 2 {
-            conn.execute_batch("BEGIN IMMEDIATE;
-              ALTER TABLE turns ADD COLUMN source TEXT NOT NULL DEFAULT 'codex';
-              ALTER TABLE turns ADD COLUMN native_session_id TEXT;
-              ALTER TABLE turns ADD COLUMN native_turn_id TEXT;
-              CREATE TABLE rei_event_sources(event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,path TEXT NOT NULL,project TEXT NOT NULL,native_id TEXT NOT NULL,offset INTEGER,PRIMARY KEY(event_id,path));
-              CREATE TABLE rei_sync(path TEXT NOT NULL,project TEXT NOT NULL,sequence INTEGER NOT NULL,anchor TEXT NOT NULL,identity TEXT NOT NULL,PRIMARY KEY(path,project));
-              CREATE TABLE rei_file_sync(path TEXT PRIMARY KEY,offset INTEGER NOT NULL,head TEXT NOT NULL,head_len INTEGER NOT NULL,identity TEXT NOT NULL);
-              INSERT INTO schema_migrations VALUES(2);
-              PRAGMA user_version=2;
-              COMMIT;").map_err(err)?;
-        }
+        let mut conn = Connection::open(path).map_err(err)?;
+        crate::migrations::migrate(&mut conn, path)?;
         let mut store = Self { conn };
         store.rebuild_if_dirty()?;
         Ok(store)

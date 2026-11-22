@@ -259,7 +259,7 @@ pub(crate) fn activity_events(events: Vec<(String, String, Event)>) -> Vec<(Stri
     let mut previous: std::collections::BTreeMap<String, Event> = std::collections::BTreeMap::new();
     let mut result = vec![];
     for (_, sid, e) in events {
-        if e.source.as_deref() != Some("claude") {
+        if e.source.as_deref() != Some("claude") || e.kind != "activity" {
             result.push((sid, e));
             continue;
         }

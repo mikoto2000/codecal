@@ -644,3 +644,67 @@ test("Claude synthetic transcripts: settings, week/month, append and restart", a
     await stop();
   }
 });
+test("database startup migrates v2 with backup and reopens compatible legacy v3", async () => {
+  test.setTimeout(90000);
+  mkdirSync(path.join(logs, "sessions"), { recursive: true });
+  mkdirSync(appdata, { recursive: true });
+  try {
+    await launch();
+    await stop();
+    const dbPath = path.join(appdata, "codecal.db");
+    const db = new DatabaseSync(dbPath);
+    db.exec(
+      "INSERT OR REPLACE INTO settings VALUES('migration-test','preserved'); DELETE FROM schema_migrations WHERE version>2; PRAGMA user_version=2;",
+    );
+    db.close();
+    await launch();
+    await stop();
+    const current = new DatabaseSync(dbPath);
+    expect(current.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: 3,
+    });
+    expect(
+      current
+        .prepare("SELECT value FROM settings WHERE key='migration-test'")
+        .get(),
+    ).toEqual({ value: "preserved" });
+    const backup = new DatabaseSync(`${dbPath}.before-v3.bak`, {
+      readOnly: true,
+    });
+    try {
+      expect(backup.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: 2,
+      });
+      expect(
+        backup
+          .prepare("SELECT value FROM settings WHERE key='migration-test'")
+          .get(),
+      ).toEqual({ value: "preserved" });
+    } finally {
+      backup.close();
+    }
+    current.exec(
+      "CREATE TABLE IF NOT EXISTS claude_files(path TEXT PRIMARY KEY,fingerprint TEXT NOT NULL); INSERT OR REPLACE INTO claude_files VALUES('/synthetic/legacy.jsonl','preserved'); PRAGMA user_version=3;",
+    );
+    current.close();
+    await launch();
+    await expect(
+      page.getByRole("button", { name: "設定", exact: true }),
+    ).toBeVisible();
+    await stop();
+    const reopened = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      expect(
+        reopened
+          .prepare(
+            "SELECT fingerprint FROM claude_files WHERE path='/synthetic/legacy.jsonl'",
+          )
+          .get(),
+      ).toEqual({ fingerprint: "preserved" });
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    await stop();
+  }
+});
