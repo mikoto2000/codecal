@@ -743,3 +743,37 @@ it("switches between grouped and individual blocks without changing the summarie
   );
   expect(screen.getByTestId("total-elapsed")).toHaveTextContent("2h 15m");
 });
+it("shows Claude source in timeline and details and saves import settings", async () => {
+  const claude = {
+    ...data,
+    turns: [
+      { ...data.turns[0], source: "claude" as const, prompt: "ツール呼び出し" },
+    ],
+  };
+  vi.mocked(api.snapshot).mockResolvedValue(claude);
+  await mount();
+  const block = screen.getByRole("button", { name: /Sample project.*10:00/ });
+  expect(block).toHaveTextContent("Claude Code");
+  expect(block).toHaveAccessibleName(/Claude Code/);
+  expect(block).toHaveAttribute(
+    "title",
+    expect.stringContaining("Claude Code"),
+  );
+  fireEvent.click(block);
+  expect(screen.getByRole("dialog")).toHaveTextContent("Claude Code");
+  fireEvent.click(screen.getByRole("button", { name: "閉じる" }));
+  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  fireEvent.click(screen.getByLabelText("Claude Code の履歴を取り込む"));
+  fireEvent.change(screen.getByLabelText("Claude Code projects ディレクトリ"), {
+    target: { value: "/claude/projects" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
+  await waitFor(() =>
+    expect(api.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        claude_enabled: true,
+        claude_root: "/claude/projects",
+      }),
+    ),
+  );
+});

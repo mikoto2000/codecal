@@ -33,6 +33,7 @@ async function launch() {
     env: {
       ...globalThis.process.env,
       CODEX_HOME: logs,
+      CLAUDE_CONFIG_DIR: path.join(root, "unused-claude"),
       REI_DATA_DIR: path.join(root, "rei"),
       APPDATA: appdata,
       CODECAL_DATA_DIR: appdata,
@@ -554,5 +555,92 @@ test("Rei SQLite: settings, WAL import, source detail, automatic append and rest
   } finally {
     await stop();
     db.close();
+  }
+});
+test("Claude synthetic transcripts: settings, week/month, append and restart", async () => {
+  test.setTimeout(120000);
+  mkdirSync(path.join(logs, "sessions"), { recursive: true });
+  mkdirSync(appdata, { recursive: true });
+  const projects = path.join(root, "unused-claude", "projects");
+  const project = path.join(projects, "C--sample-Claude");
+  mkdirSync(project, { recursive: true });
+  const sid = "550e8400-e29b-41d4-a716-446655440000";
+  const file = path.join(project, `${sid}.jsonl`);
+  const message = (uuid: string, timestamp: string, type: string) =>
+    JSON.stringify({
+      uuid,
+      timestamp,
+      type,
+      sessionId: sid,
+      cwd: "C:/sample/Claude",
+      gitBranch: "synthetic",
+      message: { content: "SECRET-not-persisted" },
+    }) + "\n";
+  writeFileSync(
+    file,
+    message("a", "2026-11-20T14:00:00Z", "user") +
+      message("b", "2026-11-20T14:02:00Z", "assistant"),
+  );
+  try {
+    await launch();
+    await page.getByRole("button", { name: "設定", exact: true }).click();
+    await page
+      .getByLabel("Claude Code の履歴を取り込む", { exact: true })
+      .check();
+    await page
+      .getByLabel("Claude Code projects ディレクトリ", { exact: true })
+      .fill(projects);
+    await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+    await expect(
+      page.getByRole("dialog", { name: "設定", exact: true }),
+    ).not.toBeVisible();
+    await expect(page.getByLabel("claude を表示")).toBeVisible();
+    for (const checkbox of await page
+      .getByRole("checkbox", { name: / を表示$/ })
+      .all()) {
+      if ((await checkbox.getAttribute("aria-label")) !== "claude を表示")
+        await checkbox.uncheck();
+    }
+    await page.getByLabel("表示日").fill("2026-11-20");
+    await expect(page.getByTestId("total-elapsed")).toHaveText("0h 2m");
+    const block = page
+      .locator(".activity-block")
+      .filter({ hasText: "Claude Code" });
+    await expect(block).toHaveCount(1);
+    await block.click();
+    await expect(page.getByRole("dialog")).toContainText("synthetic");
+    await expect(page.getByRole("dialog")).not.toContainText(
+      "SECRET-not-persisted",
+    );
+    await page.getByRole("button", { name: "閉じる", exact: true }).click();
+    await page.getByRole("button", { name: "月", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "2026-11-20 0h 2m", exact: true }),
+    ).toBeVisible();
+    appendFileSync(
+      file,
+      message("c", "2026-11-20T14:04:00Z", "user") +
+        message("d", "2026-11-20T14:05:00Z", "assistant"),
+    );
+    await expect(page.getByTestId("total-elapsed")).toHaveText("0h 3m", {
+      timeout: 35000,
+    });
+    await stop();
+    await launch();
+    await expect(page.getByLabel("claude を表示")).toBeVisible();
+    const db = new DatabaseSync(path.join(appdata, "codecal.db"), {
+      readOnly: true,
+    });
+    try {
+      const records = db
+        .prepare("SELECT event FROM events WHERE session_id LIKE 'claude:%'")
+        .all();
+      expect(records.length).toBe(4);
+      expect(JSON.stringify(records)).not.toContain("SECRET-not-persisted");
+    } finally {
+      db.close();
+    }
+  } finally {
+    await stop();
   }
 });
