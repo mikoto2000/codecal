@@ -705,6 +705,10 @@ footer button {
   margin-left: 12px;
 }
 dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  height: fit-content;
   color: var(--text);
   background: var(--surface);
   border: 1px solid var(--border);
