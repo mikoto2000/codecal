@@ -77,3 +77,94 @@ fn old_version_marker_with_already_added_columns_does_not_fail_duplicate_column(
     drop(Store::open(&path).unwrap());
     assert_eq!(version(&path), 3);
 }
+#[test]
+fn refuses_a_directory_at_backup_path_without_migrating() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("old.db");
+    drop(Store::open(&path).unwrap());
+    let c = Connection::open(&path).unwrap();
+    c.execute_batch("DELETE FROM schema_migrations WHERE version>2; PRAGMA user_version=2;")
+        .unwrap();
+    drop(c);
+    std::fs::create_dir(tmp.path().join("old.db.before-v3.bak")).unwrap();
+    assert!(Store::open(&path).is_err());
+    assert_eq!(version(&path), 2);
+}
+#[test]
+fn migration_failure_rolls_back_schema_and_keeps_original_version_and_data() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("old.db");
+    let c = Connection::open(&path).unwrap();
+    c.execute_batch("CREATE TABLE turns(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,turn_id TEXT NOT NULL,project_id TEXT NOT NULL,start INTEGER NOT NULL,end INTEGER,status TEXT NOT NULL,prompt TEXT NOT NULL,tokens INTEGER,UNIQUE(session_id,turn_id));
+        INSERT INTO turns VALUES('s:t','s','t','p',0,1000,'completed','keep',NULL);
+        CREATE TABLE rei_sync(incompatible TEXT); PRAGMA user_version=1;").unwrap();
+    drop(c);
+    assert!(Store::open(&path).is_err());
+    assert_eq!(version(&path), 1);
+    let c = Connection::open(&path).unwrap();
+    assert_eq!(
+        c.query_row("SELECT prompt FROM turns", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "keep"
+    );
+    let added: i64 = c
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('turns') WHERE name='source'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(added, 0);
+}
+#[test]
+fn future_and_incompatible_v3_are_rejected_without_resetting_schema() {
+    let tmp = tempfile::tempdir().unwrap();
+    for v in [3, 99] {
+        let path = tmp.path().join(format!("unknown-{v}.db"));
+        let c = Connection::open(&path).unwrap();
+        c.execute_batch("CREATE TABLE sentinel(value TEXT); INSERT INTO sentinel VALUES('keep');")
+            .unwrap();
+        c.pragma_update(None, "user_version", v).unwrap();
+        drop(c);
+        assert!(Store::open(&path).is_err());
+        assert_eq!(version(&path), v);
+        let c = Connection::open(&path).unwrap();
+        assert_eq!(
+            c.query_row("SELECT value FROM sentinel", [], |r| r.get::<_, String>(0))
+                .unwrap(),
+            "keep"
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+    }
+}
+#[test]
+fn backs_up_committed_wal_records_and_preserves_zero_version_legacy_database() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("wal.db");
+    let c = Connection::open(&path).unwrap();
+    c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;
+        CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL); INSERT INTO settings VALUES('keep','wal value'); PRAGMA user_version=0;").unwrap();
+    assert!(tmp.path().join("wal.db-wal").is_file());
+    let s = Store::open(&path).unwrap();
+    assert_eq!(s.get_setting("keep").unwrap().as_deref(), Some("wal value"));
+    drop(s);
+    let backup = Connection::open(tmp.path().join("wal.db.before-v3.bak")).unwrap();
+    assert_eq!(
+        backup
+            .query_row("SELECT value FROM settings WHERE key='keep'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .unwrap(),
+        "wal value"
+    );
+    assert_eq!(version(&path), 3);
+    drop(c);
+}

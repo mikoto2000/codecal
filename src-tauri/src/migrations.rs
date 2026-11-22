@@ -61,7 +61,10 @@ fn backup(conn: &Connection, path: &Path) -> Result<(), String> {
     name.push(".before-v3.bak");
     let target = path.with_file_name(name);
     if target.exists() {
-        return Ok(());
+        if target.is_file() {
+            return Ok(());
+        }
+        return Err("DB移行前のバックアップ先がファイルではありません".into());
     }
     let parent = path
         .parent()
@@ -102,6 +105,17 @@ pub(crate) fn migrate(conn: &mut Connection, path: &Path) -> Result<(), String> 
     let tx = conn
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(err)?;
+    // Another executable may have migrated while we waited for the write lock.
+    let locked_version: i64 = tx
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .map_err(err)?;
+    if locked_version > VERSION {
+        return Err("別のCodeCalがDBを新しいバージョンへ更新しました".into());
+    }
+    if locked_version == VERSION {
+        validate(&tx)?;
+        return tx.commit().map_err(err);
+    }
     // v0 -> v1: initialize the base tables. IF NOT EXISTS also repairs a legacy
     // marker written before all tables had been initialized.
     tx.execute_batch("
