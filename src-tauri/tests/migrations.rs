@@ -196,3 +196,26 @@ fn preserves_explicit_legacy_claude_turn_boundaries_after_migration() {
     assert_eq!(a.turns[0].end, Some(60000));
     assert_eq!(a.days[0].elapsed_ms, 120000);
 }
+#[test]
+fn reports_migration_before_backup_and_schema_changes_but_not_for_current_schema() {
+    use std::cell::Cell;
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("progress.db");
+    drop(Store::open(&path).unwrap());
+    let c = Connection::open(&path).unwrap();
+    c.execute_batch("DELETE FROM schema_migrations WHERE version>2; PRAGMA user_version=2;")
+        .unwrap();
+    drop(c);
+    let calls = Cell::new(0);
+    drop(
+        Store::open_with_progress(&path, || {
+            calls.set(calls.get() + 1);
+            assert_eq!(version(&path), 2);
+            assert!(!tmp.path().join("progress.db.before-v3.bak").exists());
+        })
+        .unwrap(),
+    );
+    assert_eq!(calls.get(), 1);
+    drop(Store::open_with_progress(&path, || calls.set(calls.get() + 1)).unwrap());
+    assert_eq!(calls.get(), 1);
+}

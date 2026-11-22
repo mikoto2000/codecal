@@ -90,8 +90,11 @@ struct Cursor {
 }
 impl Store {
     pub fn open(path: &Path) -> Result<Self, String> {
+        Self::open_with_progress(path, || {})
+    }
+    pub fn open_with_progress(path: &Path, on_migration: impl Fn()) -> Result<Self, String> {
         let mut conn = Connection::open(path).map_err(err)?;
-        crate::migrations::migrate(&mut conn, path)?;
+        crate::migrations::migrate(&mut conn, path, on_migration)?;
         let mut store = Self { conn };
         store.rebuild_if_dirty()?;
         Ok(store)

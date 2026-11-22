@@ -83,7 +83,11 @@ fn backup(conn: &Connection, path: &Path) -> Result<(), String> {
     }
 }
 
-pub(crate) fn migrate(conn: &mut Connection, path: &Path) -> Result<(), String> {
+pub(crate) fn migrate(
+    conn: &mut Connection,
+    path: &Path,
+    on_migration: impl Fn(),
+) -> Result<(), String> {
     conn.busy_timeout(std::time::Duration::from_secs(10))
         .map_err(err)?;
     let version: i64 = conn
@@ -95,6 +99,7 @@ pub(crate) fn migrate(conn: &mut Connection, path: &Path) -> Result<(), String> 
     if version == VERSION {
         validate(conn)?;
     } else {
+        on_migration();
         backup(conn, path)?;
     }
     conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;")
