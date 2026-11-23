@@ -163,10 +163,9 @@ export default function App({ initialDate }: { initialDate?: string }) {
     [hidden, setHidden] = useState<Set<string>>(new Set());
   const {
     viewportRef: timelineViewportRef,
-    scale: dayScale,
+    scale: timelineScale,
     reset: resetTimelineZoom,
-  } = useTimelineZoom(view === "day");
-  const timelineScale = view === "day" ? dayScale : 1;
+  } = useTimelineZoom(view !== "month");
   const [loading, setLoading] = useState(true),
     [syncing, setSyncing] = useState(false),
     [saving, setSaving] = useState(false),
@@ -801,21 +800,19 @@ export default function App({ initialDate }: { initialDate?: string }) {
                     同じプロジェクト・間隔5分以内
                   </span>
                 )}
-                {view === "day" && (
-                  <div className="timeline-zoom-controls">
-                    <span>Ctrl＋ホイールで拡大・縮小</span>
-                    <span aria-label="タイムラインの倍率">
-                      {Math.round(dayScale * 100)}%
-                    </span>
-                    <button
-                      aria-label="タイムラインの倍率をリセット"
-                      onClick={resetTimelineZoom}
-                      disabled={dayScale === 1}
-                    >
-                      リセット
-                    </button>
-                  </div>
-                )}
+                <div className="timeline-zoom-controls">
+                  <span>Ctrl＋ホイールで拡大・縮小</span>
+                  <span aria-label="タイムラインの倍率">
+                    {Math.round(timelineScale * 100)}%
+                  </span>
+                  <button
+                    aria-label="タイムラインの倍率をリセット"
+                    onClick={resetTimelineZoom}
+                    disabled={timelineScale === 1}
+                  >
+                    リセット
+                  </button>
+                </div>
               </div>
               <div
                 className="week-head"
