@@ -7,6 +7,7 @@ import {
   useState,
   useTransition,
   type ReactNode,
+  type MouseEvent,
   type CSSProperties,
 } from "react";
 import { DateTime } from "luxon";
@@ -52,7 +53,18 @@ function Modal({
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const pressedOutside = useRef(false);
   const titleId = useId();
+  const isOutside = (event: MouseEvent<HTMLDialogElement>) => {
+    if (event.target !== event.currentTarget) return false;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return (
+      event.clientX < bounds.left ||
+      event.clientX > bounds.right ||
+      event.clientY < bounds.top ||
+      event.clientY > bounds.bottom
+    );
+  };
   useEffect(() => {
     const trigger = document.activeElement;
     const d = ref.current;
@@ -68,6 +80,13 @@ function Modal({
     <dialog
       ref={ref}
       aria-labelledby={titleId}
+      onMouseDown={(event) => {
+        pressedOutside.current = isOutside(event);
+      }}
+      onClick={(event) => {
+        if (pressedOutside.current && isOutside(event)) close();
+        pressedOutside.current = false;
+      }}
       onCancel={(e) => {
         e.preventDefault();
         close();

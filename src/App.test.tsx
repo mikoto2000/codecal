@@ -92,6 +92,62 @@ it("returns focus to the settings trigger and associates the visible dialog titl
   fireEvent.click(within(dialog).getByRole("button", { name: "閉じる" }));
   expect(trigger).toHaveFocus();
 });
+it.each([
+  [99, 150],
+  [401, 150],
+  [150, 99],
+  [150, 301],
+])(
+  "closes settings on an outside click at (%i, %i)",
+  async (clientX, clientY) => {
+    await mount();
+    const trigger = screen.getByRole("button", { name: "設定" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: "設定" });
+    vi.spyOn(dialog, "getBoundingClientRect").mockReturnValue({
+      left: 100,
+      right: 400,
+      top: 100,
+      bottom: 300,
+      x: 100,
+      y: 100,
+      width: 300,
+      height: 200,
+      toJSON: () => ({}),
+    });
+    fireEvent.mouseDown(dialog, { clientX, clientY });
+    fireEvent.click(dialog, { clientX, clientY });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  },
+);
+it("keeps settings open for content, padding and drags starting inside", async () => {
+  await mount();
+  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  const dialog = screen.getByRole("dialog", { name: "設定" });
+  vi.spyOn(dialog, "getBoundingClientRect").mockReturnValue({
+    left: 100,
+    right: 400,
+    top: 100,
+    bottom: 300,
+    x: 100,
+    y: 100,
+    width: 300,
+    height: 200,
+    toJSON: () => ({}),
+  });
+  const heading = within(dialog).getByRole("heading", { name: "設定" });
+  fireEvent.mouseDown(heading, { clientX: 150, clientY: 150 });
+  fireEvent.click(heading, { clientX: 150, clientY: 150 });
+  fireEvent.mouseDown(dialog, { clientX: 105, clientY: 105 });
+  fireEvent.click(dialog, { clientX: 105, clientY: 105 });
+  expect(dialog).toBeInTheDocument();
+  fireEvent.mouseDown(heading, { clientX: 150, clientY: 150 });
+  fireEvent.mouseUp(dialog, { clientX: 50, clientY: 50 });
+  fireEvent.click(dialog, { clientX: 50, clientY: 50 });
+  expect(dialog).toBeInTheDocument();
+});
 it("keeps project drafts on ordinary reloads and reflects externally changed fields", async () => {
   await mount();
   fireEvent.click(screen.getByRole("button", { name: "設定" }));

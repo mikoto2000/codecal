@@ -777,6 +777,51 @@ test("database startup failures stop the spinner and allow retry", async () => {
   }
 });
 
+test("dialogs close on backdrop clicks and preserve inside interactions", async () => {
+  mkdirSync(path.join(logs, "sessions"), { recursive: true });
+  mkdirSync(appdata, { recursive: true });
+  try {
+    await launch();
+    for (const name of ["設定", "診断"]) {
+      const trigger = page.getByRole("button", { name, exact: true });
+      for (const side of ["left", "right", "top", "bottom"]) {
+        await trigger.click();
+        const dialog = page.getByRole("dialog");
+        await expect(dialog).toBeVisible();
+        const bounds = (await dialog.boundingBox())!;
+        const inside = { x: bounds.x + 8, y: bounds.y + 8 };
+        const outside = {
+          x:
+            side === "left"
+              ? bounds.x - 8
+              : side === "right"
+                ? bounds.x + bounds.width + 8
+                : bounds.x + bounds.width / 2,
+          y:
+            side === "top"
+              ? bounds.y - 8
+              : side === "bottom"
+                ? bounds.y + bounds.height + 8
+                : bounds.y + bounds.height / 2,
+        };
+        await dialog.getByRole("heading").first().click();
+        await page.mouse.click(inside.x, inside.y);
+        await expect(dialog).toBeVisible();
+        await page.mouse.move(inside.x, inside.y);
+        await page.mouse.down();
+        await page.mouse.move(outside.x, outside.y);
+        await page.mouse.up();
+        await expect(dialog).toBeVisible();
+        await page.mouse.click(outside.x, outside.y);
+        await expect(dialog).not.toBeVisible();
+        await expect(trigger).toBeFocused();
+      }
+    }
+  } finally {
+    await stop();
+  }
+});
+
 test("corrupt settings recover with a persistent backup and dialogs restore focus", async () => {
   test.setTimeout(90000);
   mkdirSync(path.join(logs, "sessions"), { recursive: true });
