@@ -787,6 +787,12 @@ dd {
   flex-direction: column;
   gap: 17px;
 }
+.prompt {
+  font-size: 14px;
+  line-height: 1.85;
+  max-height: min(480px, 50vh);
+  margin: 0 0 20px;
+}
 .settings-form > label {
   display: flex;
   flex-direction: column;
@@ -870,8 +876,12 @@ legend {
   font-size: 13px;
   font-weight: 500;
   overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.7;
 }
 .day-stats ~ p {
   margin: 12px 0;

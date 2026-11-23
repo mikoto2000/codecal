@@ -1122,6 +1122,14 @@ export default function App({ initialDate }: { initialDate?: string }) {
             </button>
           )}
           <span className="status-pill">{statusLabel[selected.status]}</span>
+          <h3>
+            {sourceLabel(selected)}{" "}
+            {selected.source === "claude" ? "の活動内容" : "への依頼"}
+          </h3>
+          <pre className="prompt">
+            {selected.prompt || "依頼内容を取得できません"}
+          </pre>
+          <h3>作業情報</h3>
           <dl>
             {selected.details?.git_branch && (
               <>
@@ -1170,13 +1178,6 @@ export default function App({ initialDate }: { initialDate?: string }) {
             <dt>トークン使用量</dt>
             <dd>{selected.tokens?.toLocaleString() ?? "取得できません"}</dd>
           </dl>
-          <h3>
-            {sourceLabel(selected)}{" "}
-            {selected.source === "claude" ? "の活動内容" : "への依頼"}
-          </h3>
-          <pre className="prompt">
-            {selected.prompt || "依頼内容を取得できません"}
-          </pre>
           <button
             onClick={() =>
               void api
