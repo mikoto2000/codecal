@@ -266,110 +266,135 @@ test("month places seven columns left to right with the following week below", a
   }
 });
 
-test("day view shows a spinner, zooms around the pointer and navigates one day", async () => {
-  mkdirSync(path.join(logs, "sessions"), { recursive: true });
-  mkdirSync(appdata, { recursive: true });
-  try {
-    await launch();
-    await page.getByLabel("表示日").fill("2026-11-20");
-    await expect(page.getByRole("main")).toHaveAttribute("aria-busy", "false");
-    await page.evaluate(() => {
-      window.__observedBusy = false;
-      const main = document.querySelector("main")!;
-      new MutationObserver((records) => {
-        if (
-          records.some((r) => r.oldValue === "true") ||
-          main.getAttribute("aria-busy") === "true"
-        )
-          window.__observedBusy = true;
-      }).observe(main, {
-        attributes: true,
-        attributeOldValue: true,
-        attributeFilter: ["aria-busy"],
-      });
-    });
-    await page.getByRole("button", { name: "日", exact: true }).click();
-    await expect(page.locator(".day-column")).toHaveCount(1);
-    await expect(page.getByLabel("表示日")).toHaveValue("2026-11-20");
-    expect(await page.evaluate(() => window.__observedBusy)).toBe(true);
-    await expect(page.getByRole("main")).toHaveAttribute("aria-busy", "false");
-    await page.locator(".week-scroll").evaluate((el) => {
-      el.scrollTop = 480;
-    });
-    await page.screenshot({ path: "docs/screenshots/day.png" });
-    const scroller = page.locator(".week-scroll");
-    const box = (await scroller.boundingBox())!;
-    const pointerY = 120;
-    const beforeZoom = await page.evaluate(() => ({
-      scrollTop: document.querySelector(".week-scroll")!.scrollTop,
-      width: window.innerWidth,
-      dpr: window.devicePixelRatio,
-    }));
-    const originalBlockHeight = await page
-      .locator(".activity-block")
-      .first()
-      .evaluate((el) => el.getBoundingClientRect().height);
-    await page.mouse.move(box.x + box.width * 0.75, box.y + pointerY);
-    await page.keyboard.down("Control");
+for (const view of ["日", "週"]) {
+  test(`${view} view zooms around the pointer and navigates its date range`, async () => {
+    mkdirSync(path.join(logs, "sessions"), { recursive: true });
+    mkdirSync(appdata, { recursive: true });
     try {
-      await page.mouse.wheel(0, -120);
-    } finally {
-      await page.keyboard.up("Control");
-    }
-    await expect(
-      page.getByLabel("タイムラインの倍率", { exact: true }),
-    ).not.toHaveText("100%");
-    const afterZoom = await page.evaluate(() => ({
-      scrollTop: document.querySelector(".week-scroll")!.scrollTop,
-      height: document.querySelector(".week-grid")!.getBoundingClientRect()
-        .height,
-      width: window.innerWidth,
-      dpr: window.devicePixelRatio,
-    }));
-    const scale = (afterZoom.height - 1) / 1440;
-    expect(scale).toBeGreaterThan(1);
-    expect(
-      Math.abs(
-        (afterZoom.scrollTop + pointerY) / scale -
-          (beforeZoom.scrollTop + pointerY),
-      ),
-    ).toBeLessThan(1);
-    expect(afterZoom.width).toBe(beforeZoom.width);
-    expect(afterZoom.dpr).toBe(beforeZoom.dpr);
-    expect(
-      await page
+      await launch();
+      await page.getByLabel("表示日").fill("2026-11-20");
+      await expect(page.getByRole("main")).toHaveAttribute(
+        "aria-busy",
+        "false",
+      );
+      await page.getByRole("button", { name: "月", exact: true }).click();
+      await expect(page.getByRole("main")).toHaveAttribute(
+        "aria-busy",
+        "false",
+      );
+      await page.evaluate(() => {
+        window.__observedBusy = false;
+        const main = document.querySelector("main")!;
+        new MutationObserver((records) => {
+          if (
+            records.some((r) => r.oldValue === "true") ||
+            main.getAttribute("aria-busy") === "true"
+          )
+            window.__observedBusy = true;
+        }).observe(main, {
+          attributes: true,
+          attributeOldValue: true,
+          attributeFilter: ["aria-busy"],
+        });
+      });
+      await page.getByRole("button", { name: view, exact: true }).click();
+      await expect(page.locator(".day-column")).toHaveCount(
+        view === "日" ? 1 : 7,
+      );
+      await expect(page.getByLabel("表示日")).toHaveValue("2026-11-20");
+      expect(await page.evaluate(() => window.__observedBusy)).toBe(true);
+      await expect(page.getByRole("main")).toHaveAttribute(
+        "aria-busy",
+        "false",
+      );
+      await page.locator(".week-scroll").evaluate((el) => {
+        el.scrollTop = 480;
+      });
+      await page.screenshot({
+        path:
+          view === "日" ? "docs/screenshots/day.png" : "test-results/week.png",
+      });
+      const scroller = page.locator(".week-scroll");
+      const box = (await scroller.boundingBox())!;
+      const pointerY = 120;
+      const beforeZoom = await page.evaluate(() => ({
+        scrollTop: document.querySelector(".week-scroll")!.scrollTop,
+        width: window.innerWidth,
+        dpr: window.devicePixelRatio,
+      }));
+      const originalBlockHeight = await page
         .locator(".activity-block")
         .first()
-        .evaluate((el) => el.getBoundingClientRect().height),
-    ).toBeGreaterThan(originalBlockHeight);
-    await page.screenshot({ path: "docs/screenshots/day-zoom.png" });
-    const zoomLabel = await page
-      .getByLabel("タイムラインの倍率", { exact: true })
-      .textContent();
-    await page.mouse.wheel(0, 120);
-    await expect
-      .poll(() => scroller.evaluate((el) => el.scrollTop))
-      .toBeGreaterThan(afterZoom.scrollTop);
-    await expect(
-      page.getByLabel("タイムラインの倍率", { exact: true }),
-    ).toHaveText(zoomLabel!);
-    await page
-      .getByRole("button", {
-        name: "タイムラインの倍率をリセット",
-        exact: true,
-      })
-      .click();
-    await expect(
-      page.getByLabel("タイムラインの倍率", { exact: true }),
-    ).toHaveText("100%");
-    await page.getByRole("button", { name: "次へ", exact: true }).click();
-    await expect(page.getByLabel("表示日")).toHaveValue("2026-11-21");
-    await page.getByRole("button", { name: "前へ", exact: true }).click();
-    await expect(page.getByLabel("表示日")).toHaveValue("2026-11-20");
-  } finally {
-    await stop();
-  }
-});
+        .evaluate((el) => el.getBoundingClientRect().height);
+      await page.mouse.move(box.x + box.width * 0.75, box.y + pointerY);
+      await page.keyboard.down("Control");
+      try {
+        await page.mouse.wheel(0, -120);
+      } finally {
+        await page.keyboard.up("Control");
+      }
+      await expect(
+        page.getByLabel("タイムラインの倍率", { exact: true }),
+      ).not.toHaveText("100%");
+      const afterZoom = await page.evaluate(() => ({
+        scrollTop: document.querySelector(".week-scroll")!.scrollTop,
+        height: document.querySelector(".week-grid")!.getBoundingClientRect()
+          .height,
+        width: window.innerWidth,
+        dpr: window.devicePixelRatio,
+      }));
+      const scale = (afterZoom.height - 1) / 1440;
+      expect(scale).toBeGreaterThan(1);
+      expect(
+        Math.abs(
+          (afterZoom.scrollTop + pointerY) / scale -
+            (beforeZoom.scrollTop + pointerY),
+        ),
+      ).toBeLessThan(1);
+      expect(afterZoom.width).toBe(beforeZoom.width);
+      expect(afterZoom.dpr).toBe(beforeZoom.dpr);
+      expect(
+        await page
+          .locator(".activity-block")
+          .first()
+          .evaluate((el) => el.getBoundingClientRect().height),
+      ).toBeGreaterThan(originalBlockHeight);
+      await page.screenshot({
+        path:
+          view === "日"
+            ? "docs/screenshots/day-zoom.png"
+            : "test-results/week-zoom.png",
+      });
+      const zoomLabel = await page
+        .getByLabel("タイムラインの倍率", { exact: true })
+        .textContent();
+      await page.mouse.wheel(0, 120);
+      await expect
+        .poll(() => scroller.evaluate((el) => el.scrollTop))
+        .toBeGreaterThan(afterZoom.scrollTop);
+      await expect(
+        page.getByLabel("タイムラインの倍率", { exact: true }),
+      ).toHaveText(zoomLabel!);
+      await page
+        .getByRole("button", {
+          name: "タイムラインの倍率をリセット",
+          exact: true,
+        })
+        .click();
+      await expect(
+        page.getByLabel("タイムラインの倍率", { exact: true }),
+      ).toHaveText("100%");
+      await page.getByRole("button", { name: "次へ", exact: true }).click();
+      await expect(page.getByLabel("表示日")).toHaveValue(
+        view === "日" ? "2026-11-21" : "2026-11-27",
+      );
+      await page.getByRole("button", { name: "前へ", exact: true }).click();
+      await expect(page.getByLabel("表示日")).toHaveValue("2026-11-20");
+    } finally {
+      await stop();
+    }
+  });
+}
 test("grouped activity keeps gaps out of totals and opens every original turn", async () => {
   mkdirSync(path.join(logs, "sessions"), { recursive: true });
   mkdirSync(appdata, { recursive: true });

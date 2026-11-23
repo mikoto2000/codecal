@@ -676,33 +676,184 @@ it("opens a selected monthly date in day view", async () => {
   expect(screen.getByLabelText("表示日")).toHaveValue("2026-11-20");
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
-it("zooms the daily timeline around the pointer and prevents browser zoom", async () => {
+it.each(["日", "週"])(
+  "zooms the %s timeline around the pointer and prevents browser zoom",
+  async (view) => {
+    await mount();
+    fireEvent.click(screen.getByRole("button", { name: view }));
+    await waitFor(() =>
+      expect(document.querySelectorAll(".day-column")).toHaveLength(
+        view === "日" ? 1 : 7,
+      ),
+    );
+    const scroller = document.querySelector(".week-scroll") as HTMLElement;
+    Object.defineProperty(scroller, "clientHeight", {
+      configurable: true,
+      value: 400,
+    });
+    vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue({
+      top: 100,
+      bottom: 500,
+      left: 0,
+      right: 1000,
+      x: 0,
+      y: 100,
+      width: 1000,
+      height: 400,
+      toJSON: () => ({}),
+    });
+    scroller.scrollTop = 480;
+    const wheel = new WheelEvent("wheel", {
+      ctrlKey: true,
+      deltaY: -120,
+      clientY: 220,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      scroller.dispatchEvent(wheel);
+    });
+    expect(wheel.defaultPrevented).toBe(true);
+    const scale =
+      Number(
+        screen
+          .getByLabelText("タイムラインの倍率")
+          .textContent?.replace("%", ""),
+      ) / 100;
+    expect(scale).toBeGreaterThan(1);
+    const exactScale =
+      (parseFloat(
+        (document.querySelector(".week-grid") as HTMLElement).style.height,
+      ) -
+        1) /
+      1440;
+    expect((scroller.scrollTop + 120) / exactScale).toBeCloseTo(600, 0);
+    const block = screen.getByRole("button", { name: /Sample project.*10:00/ });
+    expect(parseFloat(block.style.height)).toBeGreaterThan(120);
+    fireEvent.click(
+      screen.getByRole("button", { name: "タイムラインの倍率をリセット" }),
+    );
+    expect(screen.getByLabelText("タイムラインの倍率")).toHaveTextContent(
+      "100%",
+    );
+    expect(block.style.height).toBe("120px");
+  },
+);
+it.each(["日", "週"])(
+  "leaves ordinary wheel scrolling unchanged in %s view",
+  async (view) => {
+    await mount();
+    fireEvent.click(screen.getByRole("button", { name: view }));
+    await waitFor(() =>
+      expect(document.querySelectorAll(".day-column")).toHaveLength(
+        view === "日" ? 1 : 7,
+      ),
+    );
+    const scroller = document.querySelector(".week-scroll") as HTMLElement;
+    const ordinary = new WheelEvent("wheel", {
+      deltaY: 120,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      scroller.dispatchEvent(ordinary);
+    });
+    expect(ordinary.defaultPrevented).toBe(false);
+    expect(screen.getByLabelText("タイムラインの倍率")).toHaveTextContent(
+      "100%",
+    );
+  },
+);
+it.each(["日", "週"])(
+  "clamps zoom in %s view and shares the scale across timeline views",
+  async (view) => {
+    await mount();
+    fireEvent.click(screen.getByRole("button", { name: view }));
+    await waitFor(() =>
+      expect(document.querySelectorAll(".day-column")).toHaveLength(
+        view === "日" ? 1 : 7,
+      ),
+    );
+    const scroller = document.querySelector(".week-scroll")!;
+    act(() => {
+      scroller.dispatchEvent(
+        new WheelEvent("wheel", {
+          ctrlKey: true,
+          deltaY: -10000,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(screen.getByLabelText("タイムラインの倍率")).toHaveTextContent(
+      "400%",
+    );
+    const limited = new WheelEvent("wheel", {
+      ctrlKey: true,
+      deltaY: -120,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      scroller.dispatchEvent(limited);
+    });
+    expect(limited.defaultPrevented).toBe(true);
+    expect(screen.getByLabelText("タイムラインの倍率")).toHaveTextContent(
+      "400%",
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: view === "日" ? "週" : "日" }),
+    );
+    await waitFor(() =>
+      expect(document.querySelectorAll(".day-column")).toHaveLength(
+        view === "日" ? 7 : 1,
+      ),
+    );
+    expect(
+      (document.querySelector(".week-grid") as HTMLElement).style.height,
+    ).toBe("5761px");
+    fireEvent.click(screen.getByRole("button", { name: "日" }));
+    await waitFor(() =>
+      expect(document.querySelectorAll(".day-column")).toHaveLength(1),
+    );
+    expect(screen.getByLabelText("タイムラインの倍率")).toHaveTextContent(
+      "400%",
+    );
+    act(() => {
+      scroller.dispatchEvent(
+        new WheelEvent("wheel", {
+          ctrlKey: true,
+          deltaY: 10000,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(screen.getByLabelText("タイムラインの倍率")).toHaveTextContent(
+      "50%",
+    );
+  },
+);
+it("reattaches weekly zoom after returning from the month view", async () => {
   await mount();
-  fireEvent.click(screen.getByRole("button", { name: "日" }));
+  const originalScroller = document.querySelector(".week-scroll")!;
+  fireEvent.wheel(originalScroller, { ctrlKey: true, deltaY: -10000 });
+  expect(screen.getByLabelText("タイムラインの倍率")).toHaveTextContent("400%");
+  fireEvent.click(screen.getByRole("button", { name: "月" }));
   await waitFor(() =>
-    expect(document.querySelectorAll(".day-column")).toHaveLength(1),
+    expect(document.querySelector(".week-scroll")).toBeNull(),
   );
-  const scroller = document.querySelector(".week-scroll") as HTMLElement;
-  Object.defineProperty(scroller, "clientHeight", {
-    configurable: true,
-    value: 400,
-  });
-  vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue({
-    top: 100,
-    bottom: 500,
-    left: 0,
-    right: 1000,
-    x: 0,
-    y: 100,
-    width: 1000,
-    height: 400,
-    toJSON: () => ({}),
-  });
-  scroller.scrollTop = 480;
+  expect(screen.queryByLabelText("タイムラインの倍率")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "週" }));
+  await waitFor(() =>
+    expect(document.querySelectorAll(".day-column")).toHaveLength(7),
+  );
+  const scroller = document.querySelector(".week-scroll")!;
+  expect(scroller).not.toBe(originalScroller);
+  expect(screen.getByLabelText("タイムラインの倍率")).toHaveTextContent("400%");
   const wheel = new WheelEvent("wheel", {
     ctrlKey: true,
-    deltaY: -120,
-    clientY: 220,
+    deltaY: 10000,
     bubbles: true,
     cancelable: true,
   });
@@ -710,105 +861,6 @@ it("zooms the daily timeline around the pointer and prevents browser zoom", asyn
     scroller.dispatchEvent(wheel);
   });
   expect(wheel.defaultPrevented).toBe(true);
-  const scale =
-    Number(
-      screen.getByLabelText("タイムラインの倍率").textContent?.replace("%", ""),
-    ) / 100;
-  expect(scale).toBeGreaterThan(1);
-  const exactScale =
-    (parseFloat(
-      (document.querySelector(".week-grid") as HTMLElement).style.height,
-    ) -
-      1) /
-    1440;
-  expect((scroller.scrollTop + 120) / exactScale).toBeCloseTo(600, 0);
-  const block = screen.getByRole("button", { name: /Sample project.*10:00/ });
-  expect(parseFloat(block.style.height)).toBeGreaterThan(120);
-  fireEvent.click(
-    screen.getByRole("button", { name: "タイムラインの倍率をリセット" }),
-  );
-  expect(screen.getByLabelText("タイムラインの倍率")).toHaveTextContent("100%");
-  expect(block.style.height).toBe("120px");
-});
-it("leaves ordinary wheel scrolling and the weekly timeline unchanged", async () => {
-  await mount();
-  const scroller = document.querySelector(".week-scroll") as HTMLElement;
-  const weekly = new WheelEvent("wheel", {
-    ctrlKey: true,
-    deltaY: -120,
-    bubbles: true,
-    cancelable: true,
-  });
-  act(() => {
-    scroller.dispatchEvent(weekly);
-  });
-  expect(weekly.defaultPrevented).toBe(false);
-  fireEvent.click(screen.getByRole("button", { name: "日" }));
-  await waitFor(() =>
-    expect(document.querySelectorAll(".day-column")).toHaveLength(1),
-  );
-  const ordinary = new WheelEvent("wheel", {
-    deltaY: 120,
-    bubbles: true,
-    cancelable: true,
-  });
-  act(() => {
-    scroller.dispatchEvent(ordinary);
-  });
-  expect(ordinary.defaultPrevented).toBe(false);
-  expect(screen.getByLabelText("タイムラインの倍率")).toHaveTextContent("100%");
-});
-it("clamps daily zoom and keeps the weekly view at its original scale", async () => {
-  await mount();
-  fireEvent.click(screen.getByRole("button", { name: "日" }));
-  await waitFor(() =>
-    expect(document.querySelectorAll(".day-column")).toHaveLength(1),
-  );
-  const scroller = document.querySelector(".week-scroll")!;
-  act(() => {
-    scroller.dispatchEvent(
-      new WheelEvent("wheel", {
-        ctrlKey: true,
-        deltaY: -10000,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-  });
-  expect(screen.getByLabelText("タイムラインの倍率")).toHaveTextContent("400%");
-  const limited = new WheelEvent("wheel", {
-    ctrlKey: true,
-    deltaY: -120,
-    bubbles: true,
-    cancelable: true,
-  });
-  act(() => {
-    scroller.dispatchEvent(limited);
-  });
-  expect(limited.defaultPrevented).toBe(true);
-  expect(screen.getByLabelText("タイムラインの倍率")).toHaveTextContent("400%");
-  fireEvent.click(screen.getByRole("button", { name: "週" }));
-  await waitFor(() =>
-    expect(document.querySelectorAll(".day-column")).toHaveLength(7),
-  );
-  expect(
-    (document.querySelector(".week-grid") as HTMLElement).style.height,
-  ).toBe("1441px");
-  fireEvent.click(screen.getByRole("button", { name: "日" }));
-  await waitFor(() =>
-    expect(document.querySelectorAll(".day-column")).toHaveLength(1),
-  );
-  expect(screen.getByLabelText("タイムラインの倍率")).toHaveTextContent("400%");
-  act(() => {
-    scroller.dispatchEvent(
-      new WheelEvent("wheel", {
-        ctrlKey: true,
-        deltaY: 10000,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-  });
   expect(screen.getByLabelText("タイムラインの倍率")).toHaveTextContent("50%");
 });
 const groupedData: Snapshot = {
