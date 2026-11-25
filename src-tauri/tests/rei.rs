@@ -335,7 +335,7 @@ fn migrates_v1_without_losing_existing_projects_turns_or_settings() {
             .unwrap()
             .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
             .unwrap(),
-        3
+        4
     );
 }
 

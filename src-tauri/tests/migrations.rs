@@ -13,7 +13,10 @@ fn opens_known_legacy_v3_without_losing_history_settings_or_claude_cache() {
     let path = tmp.path().join("old.db");
     drop(Store::open(&path).unwrap());
     let c = Connection::open(&path).unwrap();
-    c.execute_batch("CREATE TABLE claude_files(path TEXT PRIMARY KEY,fingerprint TEXT NOT NULL);
+    c.execute_batch("DROP TABLE human_activity_records;
+        DROP TABLE human_activity_sources;
+        DELETE FROM schema_migrations WHERE version>3;
+        CREATE TABLE claude_files(path TEXT PRIMARY KEY,fingerprint TEXT NOT NULL);
         INSERT INTO claude_files VALUES('/synthetic/session.jsonl','cached');
         INSERT INTO projects VALUES('p','/synthetic','Custom name','#123456',1000);
         INSERT INTO sessions VALUES('s','p',0,1000);
@@ -38,7 +41,7 @@ fn opens_known_legacy_v3_without_losing_history_settings_or_claude_cache() {
             .unwrap(),
         "cached"
     );
-    assert_eq!(version(&path), 3);
+    assert_eq!(version(&path), 4);
 }
 #[test]
 fn upgrades_v2_automatically_with_a_consistent_backup_and_idempotent_reopen() {
@@ -57,8 +60,8 @@ fn upgrades_v2_automatically_with_a_consistent_backup_and_idempotent_reopen() {
         Some("before upgrade")
     );
     drop(s);
-    assert_eq!(version(&path), 3);
-    let backup = tmp.path().join("old.db.before-v3.bak");
+    assert_eq!(version(&path), 4);
+    let backup = tmp.path().join("old.db.before-v4.bak");
     assert!(backup.is_file());
     assert_eq!(version(&backup), 2);
     let before = std::fs::read(&backup).unwrap();
@@ -70,7 +73,7 @@ fn retries_keep_older_backups_and_capture_the_latest_pre_migration_state() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("retry.db");
     drop(Store::open(&path).unwrap());
-    let original = tmp.path().join("retry.db.before-v3.bak");
+    let original = tmp.path().join("retry.db.before-v4.bak");
     std::fs::write(&original, b"original backup").unwrap();
     for sequence in 1..=2 {
         let c = Connection::open(&path).unwrap();
@@ -84,7 +87,7 @@ fn retries_keep_older_backups_and_capture_the_latest_pre_migration_state() {
         drop(Store::open(&path).unwrap());
         let backup_path = tmp
             .path()
-            .join(format!("retry.db.before-v3.bak.{sequence}"));
+            .join(format!("retry.db.before-v4.bak.{sequence}"));
         assert_eq!(version(&backup_path), 2);
         let backup = Connection::open(backup_path).unwrap();
         let value: String = backup
@@ -106,7 +109,7 @@ fn old_version_marker_with_already_added_columns_does_not_fail_duplicate_column(
         .unwrap();
     drop(c);
     drop(Store::open(&path).unwrap());
-    assert_eq!(version(&path), 3);
+    assert_eq!(version(&path), 4);
 }
 #[test]
 fn refuses_a_directory_at_backup_path_without_migrating() {
@@ -117,7 +120,7 @@ fn refuses_a_directory_at_backup_path_without_migrating() {
     c.execute_batch("DELETE FROM schema_migrations WHERE version>2; PRAGMA user_version=2;")
         .unwrap();
     drop(c);
-    std::fs::create_dir(tmp.path().join("old.db.before-v3.bak")).unwrap();
+    std::fs::create_dir(tmp.path().join("old.db.before-v4.bak")).unwrap();
     assert!(Store::open(&path).is_err());
     assert_eq!(version(&path), 2);
 }
@@ -187,7 +190,7 @@ fn backs_up_committed_wal_records_and_preserves_zero_version_legacy_database() {
     let s = Store::open(&path).unwrap();
     assert_eq!(s.get_setting("keep").unwrap().as_deref(), Some("wal value"));
     drop(s);
-    let backup = Connection::open(tmp.path().join("wal.db.before-v3.bak")).unwrap();
+    let backup = Connection::open(tmp.path().join("wal.db.before-v4.bak")).unwrap();
     assert_eq!(
         backup
             .query_row("SELECT value FROM settings WHERE key='keep'", [], |r| {
@@ -196,7 +199,7 @@ fn backs_up_committed_wal_records_and_preserves_zero_version_legacy_database() {
             .unwrap(),
         "wal value"
     );
-    assert_eq!(version(&path), 3);
+    assert_eq!(version(&path), 4);
     drop(c);
 }
 #[test]
@@ -242,7 +245,7 @@ fn reports_migration_before_backup_and_schema_changes_but_not_for_current_schema
         Store::open_with_progress(&path, || {
             calls.set(calls.get() + 1);
             assert_eq!(version(&path), 2);
-            assert!(!tmp.path().join("progress.db.before-v3.bak").exists());
+            assert!(!tmp.path().join("progress.db.before-v4.bak").exists());
         })
         .unwrap(),
     );

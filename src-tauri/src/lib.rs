@@ -5,6 +5,7 @@ mod desktop;
 mod migrations;
 pub mod parser;
 pub mod rei;
+pub mod rei_human;
 pub mod store;
 #[cfg(feature = "desktop")]
 pub use desktop::run;

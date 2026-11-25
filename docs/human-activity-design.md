@@ -7,6 +7,7 @@ CodeCal は活動種別と観測推定時間だけを表示する。具体的な
 
 `git fetch origin` 後の CodeCal main は `7d0c49c2854297d6a2c6b9f30ad9fcd3a714ba8f`。
 Rei HEAD は `42c40ea8f`。依頼の基準から実装差分はない。両方で AGENTS.md は見つからなかった。
+Phase 1 作業中の再確認では Rei HEAD が `84813a825` へ進んでいたが、指定された6クラスは `42c40ea8f` から差分がなかった。Reiへの変更は行っていない。
 未追跡の `docs/rei-human-activity-design.md` は利用者の資料として元ディレクトリに保持し、本書は別名にした。
 
 調査した実装:
@@ -53,7 +54,8 @@ SHA-256 の入力は native_id、captured_at、duration_ms、正規化 kind の�
 6. コピーは `(native_id,allowed_hash,start,effective_end,kind)` 一致だけを排除。後続の異なるコピーの長い区間は残す。
 7. UTCのまま計算し、IANA zone の暦日境界で表示・集計を分割する。DST日を24時間と仮定しない。
 
-生の観測と実効終了をキャッシュし、正常同期の同一トランザクションで代表と lead(captured_at) を再計算する。
+最小化した観測と実効終了をキャッシュし、正常同期の同一トランザクションで代表と後続開始時刻による切詰めを確定する。
+少数変更では変更前後の時刻と前観測、大量変更では開始索引の順次走査を使い、確定規則は共通にする。
 元から削除された行は保持するため、区間計算の観測集合も保持したキャッシュ全体とする。
 総時間/種別時間はそれぞれ区間の和集合。分類間の重複をどちらかへ寄せず、内訳合計が総時間を超える説明を表示する。
 AI集計の時間・件数は既存計算のまま。点の観測も過去からの長い観測も期間取得で扱う。
@@ -70,17 +72,25 @@ v4へ additive migration。`human_activity_sources`: source_id、正規化パス
 期間検索用 `(source_id,captured_at)` と `(source_id,effective_end)` の索引。任意の長時間区間も overlap query で取得する。
 初回/v0/v1/v2/v3 移行、rollback、未知版拒否、AI/project/config保持をテストする。
 
-ソースは正規化 DB パスと物理ファイル識別の組で分離する。Windowsは開いたファイルの volume/file ID、Unixは device/inode を使う。
+ソースは正規化した論理絶対パスと物理ファイル識別の組で分離する。Windowsは開いたファイルの volume/file ID、Unixは device/inode を使う。
+選択したパスの junction/symlink を初回に解決して固定せず、各照合時に選択パスの現在の実体を確認する。
 接続とファイル識別の対応を同期前後で確認する。置換時は旧接続を破棄して新 incarnation を作る。識別取得失敗は成功扱いせず既存キャッシュを維持する。
 同一パスでも置換された DB を過去の incarnation に混ぜない。通常表示は現在パスの現在 incarnation のみ。
 別パスへ移動/コピーしたソースは別管理。同一元ファイルの継続更新と、識別まで保存した特殊な外部復元は区別できない制約が残る。
+
+Windows の bundled SQLite 標準 VFS は DB を `FILE_SHARE_READ | FILE_SHARE_WRITE` で開き、`FILE_SHARE_DELETE` を指定しない。
+したがって接続中の物理ファイル置換は OS に拒否され得る。独自 VFS や原本コピーによって回避せず、機能 OFF で接続を閉じ、置換後の再 ON で新しい物理 ID を検出する。
+この手順の置換・キャッシュ分離をネイティブテストする。Unix では接続中に置換できるため、読取の前後でも物理 ID を照合する。
+Windows の識別には lock 内に既存の `windows-sys 0.61.2` のファイル ID API を直接利用し、新規クレートは追加しない。
 
 ## 同期・キャンセル
 
 専用 worker と継続 read connection。同一接続の data_version、DB/WAL 通知、物理識別、30秒補完を併用。
 初回/手動/ソース変更は全確認。自動は同一接続で version 不変なら省略する。AIだけの更新も全確認が必要。
 1ソース1ジョブ、通知は dirty flag に集約、最小間隔5秒、完了後に dirty を再確認する。
-全確認は ID キーページ256行、read transaction を使い、許可フィールドだけをディスク上の一時 SQLite へ格納する。
+全確認は rowid キーページ256行、read transaction を使い、許可フィールドだけをディスク上の一時 SQLite へ格納する。
+初回カーソルは明示的な未指定値とし、rowid の最小値・0・最大値を含めて走査する。
+最小化済み一時DBとキャッシュを native_id 順にマージ比較して、追加・更新だけをディスク上の TEMP 表へ蓄積する。原本も一時DBもアプリDBへ ATTACH しない。
 メモリはページと診断カウンタに制限し、Store Mutex を全確認中には保持しない。読み終わった時だけ cache を単一 transaction で upsert。
 保持接続上の version を読み取り開始前に記録し、完了後に増えていれば次回再確認する。同期中の通知を失わない。
 

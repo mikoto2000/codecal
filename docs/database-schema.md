@@ -1,6 +1,6 @@
 # SQLite データモデル
 
-アプリデータ下の codecal.db に保存します。foreign_keys=ON、journal_mode=WAL、busy_timeout=10秒。スキーマバージョンはPRAGMA user_versionとschema_migrationsで管理します。現行は3です。v0/v1/v2は構造を確認し、トランザクションで段階的にv3へ移行します。既知の互換v3はそのまま開き、新しいバージョンや非互換構造のDBは変更せず拒否します。旧ターンの取得元は `codex` とします。移行前にはWALを含む `codecal.db.before-v3.bak` を作成し、既存ファイルがあれば `.1`、`.2` と連番を付けて今回の直前状態を保存します。既存のプロジェクト名・色・設定を維持します。
+アプリデータ下の codecal.db に保存します。foreign_keys=ON、journal_mode=WAL、busy_timeout=10秒。スキーマバージョンはPRAGMA user_versionとschema_migrationsで管理します。現行は4です。v0〜v3は構造を確認し、トランザクションでv4へ移行します。既知の互換v3には専用テーブルを追加し、新しいバージョンや非互換構造のDBは変更せず拒否します。旧ターンの取得元は `codex` とします。移行前にはWALを含む `codecal.db.before-v4.bak` を作成し、既存ファイルがあれば `.1`、`.2` と連番を付けて保存します。旧 `.before-v3.bak` も変更しません。既存のプロジェクト名・色・設定を維持します。
 
 | テーブル           | 主な列・制約                                                                                                                                  |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -43,3 +43,21 @@ Windowsの既定保存先は `%LOCALAPPDATA%/dev.codecal.desktop/codecal.db` で
 `turns.source` は `codex` / `rei` / `claude`。Claudeの `details`（親セッションID・gitブランチ）は正規化イベントに保持し、snapshotでは対象セッションのイベントを一括走査して参照し、ターンごとの再探索を行いません。旧v3に任意で存在する `claude_files(path,fingerprint)` は保持しますが、新規DBには作成しません。
 
 DB内の `settings.config` が不正なJSONまたは無効な設定なら、起動時に元の値を `_config_backup_<時刻>_<連番>` というキーへ退避し、既定値への置換と同じトランザクションで保存します。復旧した事実と退避キーを画面へ表示します。履歴やプロジェクト設定は変更しません。3要素のしきい値が現行形式です。旧4要素の設定は互換読み込みとして先頭3要素を使用します。
+
+## 人間アクティビティ専用キャッシュ（v4）
+
+本番UI・設定との接続は後続フェーズです。AI のテーブル・snapshot に人間の観測を追加しません。
+
+| テーブル               | 列と用途                                                                                                                                                                      |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| human_activity_sources | source_id PK（32byte digest BLOB）、source_path（選択した論理絶対パス、内部のみ）、file_identity、reader_version、last_sync、sync_status、diagnostics（固定コードと件数のみ） |
+| human_activity_records | source_id FK / native_id の複合PK、captured_at（UTC ms）、duration_ms、kind（3種別）、content_hash（32byte digest BLOB）、effective_end（非代表の同時刻観測はNULL）           |
+
+`human_activity_records` は WITHOUT ROWID とし、`(source_id,captured_at,native_id)`、`(source_id,effective_end)` に索引を持ちます。
+判定文字列・元JSON・画面や活動の具体的内容は保存しません。ハッシュは native_id、開始、推定継続時間、正規化種別だけから生成します。
+ソースごとの区間確定をキャッシュ反映と同じトランザクションで行い、削除された観測・不正更新の前回正常値は保持します。
+変更が少ない場合は変更時刻と直前の観測だけを再計算し、大量更新時は開始索引を順に読みます。
+
+移行前バックアップと Local 保存先へのコピーは、作成した私有コピーから人間用2テーブルの行を除外して VACUUM します。
+コピー元・Rei 原本・AI履歴は変更しません。旧バックアップは上書きせず保持します。
+このキャッシュ除外はCodeCalが新しく作るコピーの方針で、OSや利用者が別に作ったコピーの安全消去を保証しません。

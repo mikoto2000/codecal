@@ -375,6 +375,7 @@ dependencies = [
  "tauri-plugin-window-state",
  "tempfile",
  "walkdir",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
