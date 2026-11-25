@@ -459,6 +459,204 @@ fn source_errors_are_fixed_codes_and_ai_only_sources_are_unsupported() {
 }
 
 #[test]
+fn privacy_outputs_and_logs_do_not_contain_the_synthetic_secret() {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "human_privacy_child", "--nocapture"])
+        .env("CODECAL_HUMAN_PRIVACY_CHILD", "1")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "isolated privacy scenario failed");
+    for bytes in [&output.stdout, &output.stderr] {
+        for marker in [
+            b"PRIVATE_HUMAN_MARKER".as_slice(),
+            b"PRIVATE_ERROR_MARKER".as_slice(),
+        ] {
+            assert!(
+                !bytes.windows(marker.len()).any(|w| w == marker),
+                "private source value leaked to process output"
+            );
+        }
+    }
+}
+
+#[test]
+fn human_privacy_child() {
+    if std::env::var_os("CODECAL_HUMAN_PRIVACY_CHILD").is_none() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("source.db");
+    let cache = tmp.path().join("cache.db");
+    let writer = Connection::open(&path).unwrap();
+    writer.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT);").unwrap();
+    let payload = serde_json::json!({"durationEstimate":2,"duplicate":true,"foreground":{"title":"PRIVATE_HUMAN_MARKER","application":"PRIVATE_HUMAN_MARKER","process":"PRIVATE_HUMAN_MARKER","command":"PRIVATE_HUMAN_MARKER","path":"PRIVATE_HUMAN_MARKER","url":"PRIVATE_HUMAN_MARKER"},"observations":["PRIVATE_HUMAN_MARKER"],"screenshotReferences":["PRIVATE_HUMAN_MARKER"],"ocr":"PRIVATE_HUMAN_MARKER","inference":{"summary":"PRIVATE_HUMAN_MARKER","activities":[{"projectCandidate":"PRIVATE_HUMAN_MARKER"}]},"userInput":"PRIVATE_HUMAN_MARKER","detection":{"reason":"PRIVATE_HUMAN_MARKER","diagnostics":{"entertainmentDisposition":"PRIVATE_HUMAN_MARKER","entertainmentReason":"PRIVATE_HUMAN_MARKER"}}});
+    writer
+        .execute(
+            "INSERT INTO activity_records VALUES('observation',1000,?)",
+            [payload.to_string()],
+        )
+        .unwrap();
+    writer
+        .execute(
+            "INSERT INTO activity_records VALUES('bad',5000,?)",
+            ["PRIVATE_HUMAN_MARKER{"],
+        )
+        .unwrap();
+    let db_before = std::fs::read(&path).unwrap();
+    let wal_path = path.with_file_name("source.db-wal");
+    let wal_before = std::fs::read(&wal_path).unwrap();
+    let reader = HumanReader::open(&path).unwrap();
+    let mut store = Store::open(&cache).unwrap();
+    store
+        .apply_human_stage(&reader.stage(|| false).unwrap(), || false)
+        .unwrap();
+    let sources = [reader.source_id().to_owned()];
+    let response = store.human_activity(&sources, 0, 10000).unwrap();
+    let wire = serde_json::to_string(&response).unwrap();
+    assert!(!wire.contains("PRIVATE_HUMAN_MARKER"));
+    let record = serde_json::to_value(&response.records[0]).unwrap();
+    assert_eq!(
+        record
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["end", "kind", "start"]
+    );
+    println!("{wire}");
+    assert_eq!(std::fs::read(&path).unwrap(), db_before);
+    assert_eq!(std::fs::read(&wal_path).unwrap(), wal_before);
+    assert!(store.snapshot("UTC").unwrap().turns.is_empty());
+    assert!(!serde_json::to_string(&store.snapshot("UTC").unwrap())
+        .unwrap()
+        .contains("PRIVATE_HUMAN_MARKER"));
+    let conn = Connection::open(&cache).unwrap();
+    let hash: String = conn
+        .query_row("SELECT content_hash FROM human_activity_records", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    writer.execute("UPDATE activity_records SET payload=? WHERE id='observation'",["{\"durationEstimate\":2,\"foreground\":{\"title\":\"PRIVATE_HUMAN_MARKER_CHANGED\"},\"detection\":{\"diagnostics\":{\"entertainmentDisposition\":\"PRIVATE_HUMAN_MARKER_CHANGED\"}}}"]).unwrap();
+    store
+        .apply_human_stage(&reader.stage(|| false).unwrap(), || false)
+        .unwrap();
+    assert_eq!(
+        conn.query_row("SELECT content_hash FROM human_activity_records", [], |r| r
+            .get::<_, String>(0))
+            .unwrap(),
+        hash
+    );
+    conn.execute_batch("CREATE TRIGGER reject_human BEFORE INSERT ON human_activity_records BEGIN SELECT RAISE(ABORT,'PRIVATE_ERROR_MARKER'); END;").unwrap();
+    let error = store
+        .apply_human_stage(&reader.stage(|| false).unwrap(), || false)
+        .unwrap_err();
+    assert_eq!(error.to_string(), "cache_write_failed");
+    eprintln!("{error}");
+    assert_eq!(
+        store.human_activity(&sources, 0, 10000).unwrap().records,
+        response.records
+    );
+    for suffix in ["", "-wal", "-shm"] {
+        let file = cache.with_file_name(format!("cache.db{suffix}"));
+        if file.exists() {
+            let bytes = std::fs::read(file).unwrap();
+            assert!(!bytes
+                .windows(b"PRIVATE_HUMAN_MARKER".len())
+                .any(|w| w == b"PRIVATE_HUMAN_MARKER"));
+        }
+    }
+}
+
+#[test]
+fn paged_snapshot_is_consistent_and_concurrent_wal_updates_remain_detectable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("source.db");
+    let writer = Connection::open(&path).unwrap();
+    writer.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT);
+        WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<599)
+        INSERT INTO activity_records SELECT printf('id-%d',x),x*1000,'{\"durationEstimate\":1}' FROM n;").unwrap();
+    let reader = HumanReader::open(&path).unwrap();
+    let calls = std::cell::Cell::new(0);
+    let stage = reader.stage(|| {
+        calls.set(calls.get()+1);
+        if calls.get()==4 {
+            writer.execute_batch("UPDATE activity_records SET payload='{\"durationEstimate\":1,\"detection\":{\"diagnostics\":{\"entertainmentDisposition\":\"ENTERTAINMENT\"}}}' WHERE id='id-0';
+                INSERT INTO activity_records VALUES('late',700000,'{\"durationEstimate\":1}');").unwrap();
+        }
+        false
+    }).unwrap();
+    assert_ne!(stage.data_version(), reader.data_version().unwrap());
+    let mut store = Store::open(&tmp.path().join("cache.db")).unwrap();
+    let sources = [reader.source_id().to_owned()];
+    store.apply_human_stage(&stage, || false).unwrap();
+    let old = store.human_activity(&sources, 0, 1_000_000).unwrap();
+    assert_eq!(old.records.len(), 600);
+    assert_eq!(old.records[0].kind, HumanKind::Unknown);
+    store
+        .apply_human_stage(&reader.stage(|| false).unwrap(), || false)
+        .unwrap();
+    let new = store.human_activity(&sources, 0, 1_000_000).unwrap();
+    assert_eq!(new.records.len(), 601);
+    assert_eq!(new.records[0].kind, HumanKind::Entertainment);
+    writer
+        .execute_batch("DROP TABLE activity_records;")
+        .unwrap();
+    assert!(reader.stage(|| false).is_err());
+    assert_eq!(
+        store
+            .human_activity(&sources, 0, 1_000_000)
+            .unwrap()
+            .records,
+        new.records
+    );
+}
+
+#[test]
+fn periods_include_prior_overlap_but_exclude_the_end_and_do_not_change_effective_intervals() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("source.db");
+    let writer = Connection::open(&path).unwrap();
+    writer
+        .execute_batch(
+            "CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT);
+        INSERT INTO activity_records VALUES('a',1000,'{\"durationEstimate\":60}');
+        INSERT INTO activity_records VALUES('b',3000,'{\"durationEstimate\":0}');
+        INSERT INTO activity_records VALUES('c',5000,'{\"durationEstimate\":1}');",
+        )
+        .unwrap();
+    let reader = HumanReader::open(&path).unwrap();
+    let sources = [reader.source_id().to_owned()];
+    let mut store = Store::open(&tmp.path().join("cache.db")).unwrap();
+    store
+        .apply_human_stage(&reader.stage(|| false).unwrap(), || false)
+        .unwrap();
+    let before = store.human_activity(&sources, 2000, 3000).unwrap();
+    assert_eq!(before.records.len(), 1);
+    assert_eq!(
+        (before.records[0].start, before.records[0].end),
+        (1000, 3000)
+    );
+    let points = store.human_activity(&sources, 3000, 5000).unwrap();
+    assert_eq!(points.records.len(), 1);
+    assert_eq!(
+        (points.records[0].start, points.records[0].end),
+        (3000, 3000)
+    );
+    assert_eq!(
+        store.human_activity(&sources, 0, 10000).unwrap().records[0],
+        before.records[0]
+    );
+    assert_eq!(
+        store
+            .human_activity(&sources, 0, 63 * 86_400_000)
+            .unwrap_err()
+            .to_string(),
+        "invalid_period"
+    );
+}
+
+#[test]
 fn migration_backup_excludes_human_cache_and_keeps_ai_settings() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("codecal.db");

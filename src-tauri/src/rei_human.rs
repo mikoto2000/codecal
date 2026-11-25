@@ -504,3 +504,32 @@ impl crate::store::Store {
         read()
     }
 }
+
+#[cfg(test)]
+mod privacy_tests {
+    use super::*;
+
+    #[test]
+    fn private_staging_file_never_contains_original_payload_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("synthetic.db");
+        let writer = Connection::open(&path).unwrap();
+        writer.execute_batch("CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT);
+            INSERT INTO activity_records VALUES('allowed-id',1000,'{\"durationEstimate\":1,\"foreground\":{\"title\":\"PRIVATE_STAGING_MARKER\"},\"detection\":{\"diagnostics\":{\"entertainmentDisposition\":\"PRIVATE_STAGING_MARKER\"}}}');").unwrap();
+        let stage = HumanReader::open(&path).unwrap().stage(|| false).unwrap();
+        let bytes = std::fs::read(stage._file.path()).unwrap();
+        assert!(!bytes
+            .windows(b"PRIVATE_STAGING_MARKER".len())
+            .any(|w| w == b"PRIVATE_STAGING_MARKER"));
+        assert!(!bytes
+            .windows(b"foreground".len())
+            .any(|w| w == b"foreground"));
+        assert_eq!(
+            stage
+                .conn
+                .query_row("SELECT kind FROM records", [], |r| r.get::<_, String>(0))
+                .unwrap(),
+            "unknown"
+        );
+    }
+}
