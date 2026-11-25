@@ -3,7 +3,7 @@ use crate::{
     rei_human::{HumanActivityResponse, HumanReader},
     store::Store,
 };
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::Serialize;
 use std::{
     path::{Path, PathBuf},
@@ -32,7 +32,6 @@ pub struct HumanPreferences {
 struct Control {
     preferences: HumanPreferences,
     status: HumanSyncStatus,
-    source: Option<String>,
     pending: bool,
     force: bool,
     requested: Instant,
@@ -85,7 +84,6 @@ impl HumanRuntime {
             control: Mutex::new(Control {
                 preferences: HumanPreferences::default(),
                 status: HumanSyncStatus::default(),
-                source: None,
                 pending: false,
                 force: false,
                 requested: Instant::now(),
@@ -123,7 +121,6 @@ impl HumanRuntime {
         if changed {
             self.shared.epoch.fetch_add(1, Ordering::SeqCst);
             control.status = HumanSyncStatus::default();
-            control.source = None;
             control.pending = preferences.enabled;
             control.force = preferences.enabled;
             control.requested = Instant::now();
@@ -169,9 +166,19 @@ impl HumanRuntime {
         if !control.preferences.enabled {
             return Err("human_activity_disabled".into());
         }
-        let sources: Vec<String> = control.source.iter().cloned().collect();
+        let path = control.preferences.root.join("storage.db");
         drop(control);
-        cache(&self.shared.cache, true)?
+        let store = cache(&self.shared.cache, true)?;
+        let current = match crate::rei_human::source_identity(&path) {
+            Ok(id) => Some(id),
+            Err(_) => {
+                let logical =
+                    crate::rei_human::logical_source_path(&path).map_err(|e| e.to_string())?;
+                store.conn.query_row("SELECT CASE WHEN typeof(source_id)='blob' THEN lower(hex(source_id)) ELSE source_id END FROM human_activity_sources WHERE source_path=? ORDER BY last_sync DESC,source_id DESC LIMIT 1", [&logical], |r| r.get::<_,String>(0)).optional().map_err(|_| "cache_read_failed")?
+            }
+        };
+        let sources: Vec<String> = current.into_iter().collect();
+        store
             .human_activity(&sources, from, to)
             .map_err(|e| e.to_string())
     }
@@ -242,7 +249,7 @@ fn run(shared: Arc<Shared>) {
                 || shared.epoch.load(Ordering::SeqCst) != epoch
                 || began.elapsed() > Duration::from_secs(30)
         };
-        let mut job = || -> Result<Option<(String, i64)>, String> {
+        let mut job = || -> Result<Option<i64>, String> {
             if reader
                 .as_ref()
                 .is_some_and(|r| r.verify_identity().is_err())
@@ -271,15 +278,14 @@ fn run(shared: Arc<Shared>) {
             cache(&shared.cache, false)?
                 .apply_human_stage(&stage, cancelled)
                 .map_err(|e| e.to_string())?;
-            Ok(Some((source.source_id().to_owned(), stage.data_version())))
+            Ok(Some(stage.data_version()))
         };
         let result = job();
         let mut control = lock(&shared.control);
         if shared.epoch.load(Ordering::SeqCst) == epoch {
             match result {
-                Ok(Some((source, v))) => {
+                Ok(Some(v)) => {
                     version = Some(v);
-                    control.source = Some(source);
                     control.status.revision += 1;
                     control.status.last_success = Some(chrono::Utc::now().timestamp_millis());
                     control.status.error = None;

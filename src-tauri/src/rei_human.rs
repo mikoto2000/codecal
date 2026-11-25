@@ -13,6 +13,24 @@ use std::{
 const MIN_TIME: i64 = -62_135_596_800_000;
 const MAX_TIME: i64 = 253_402_300_799_999;
 
+pub(crate) fn logical_source_path(path: &Path) -> Result<String, HumanError> {
+    let path = std::path::absolute(path).map_err(|_| HumanError("source_unavailable"))?;
+    let value = path.to_string_lossy().to_string();
+    #[cfg(windows)]
+    let value = value.to_lowercase();
+    Ok(value)
+}
+
+/// Identify the current physical file without opening or querying SQLite.
+pub fn source_identity(path: &Path) -> Result<String, HumanError> {
+    let file = File::open(path).map_err(|_| HumanError("source_unavailable"))?;
+    Ok(crate::store::hash(format!(
+        "{}\0{}",
+        logical_source_path(path)?,
+        identity(&file)?
+    )))
+}
+
 fn validate_source_schema(conn: &Connection) -> Result<(), HumanError> {
     let ordinary: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_list WHERE schema='main' AND name='activity_records' AND type='table' AND wr=0)",[],|r|r.get(0)).map_err(|_|HumanError("unsupported_source"))?;
     let columns: i64 = conn.query_row("SELECT count(*) FROM pragma_table_xinfo('activity_records') WHERE hidden=0 AND ((name='id' AND upper(type)='TEXT' AND pk=1) OR (name='captured_at' AND upper(type)='INTEGER') OR (name='payload' AND upper(type)='TEXT'))",[],|r|r.get(0)).map_err(|_|HumanError("unsupported_source"))?;
