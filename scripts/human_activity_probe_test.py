@@ -46,6 +46,10 @@ class ProjectionTest(unittest.TestCase):
         self.insert('{"durationEstimate": 10}')
         self.assertEqual(self.db.execute(projection()).fetchone()[2:], (10, "unknown", "ok"))
 
+    def test_json_integer_outside_sqlite_range_is_rejected(self):
+        self.insert('{"durationEstimate":9223372036854775808}')
+        self.assertEqual(self.db.execute(projection()).fetchone()[2:], (None, "unknown", "invalid_duration_type"))
+
     def test_all_saved_classifications_and_wrong_types(self):
         for value, expected in [("ENTERTAINMENT", "entertainment"), ("NON_ENTERTAINMENT", "non_entertainment"), ("UNCERTAIN", "unknown"), (None, "unknown"), ({"secret": "SECRET_OBJECT"}, "unknown"), (42, "unknown")]:
             with self.subTest(value_type=type(value).__name__):

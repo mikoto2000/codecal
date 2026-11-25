@@ -31,6 +31,8 @@ def projection():
           WHEN NOT json_valid(payload) THEN 'invalid_json'
           WHEN json_type(payload,'$.durationEstimate') IS NOT 'integer'
             THEN 'invalid_duration_type'
+          WHEN typeof(json_extract(payload,'$.durationEstimate'))<>'integer'
+            THEN 'invalid_duration_type'
           ELSE 'ok' END AS status
       FROM activity_records ORDER BY id
     )
