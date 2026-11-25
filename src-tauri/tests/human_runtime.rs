@@ -525,3 +525,56 @@ fn orphan_staging_cleanup_respects_selected_source_and_keeps_unrelated_files() {
     assert!(!files[1].exists());
     assert!(unrelated.exists());
 }
+
+#[test]
+fn wal_changes_ai_only_changes_manual_sync_and_coalesced_notifications_are_observed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache.db");
+    drop(Store::open(&cache).unwrap());
+    let root = tmp.path().join("source");
+    source(&root);
+    let writer = rusqlite::Connection::open(root.join("storage.db")).unwrap();
+    writer
+        .execute_batch("CREATE TABLE agent_events(sequence INTEGER);")
+        .unwrap();
+    let runtime = HumanRuntime::new(cache, tmp.path().join("staging"), |_| {});
+    runtime
+        .configure(
+            HumanPreferences {
+                enabled: true,
+                root,
+                auto_refresh: true,
+            },
+            || Ok(()),
+        )
+        .unwrap();
+    synced(&runtime, 1);
+    runtime.request(false);
+    assert!(runtime.wait_idle(Duration::from_secs(3)));
+    assert_eq!(
+        runtime.status().revision,
+        1,
+        "unchanged data_version should not scan/apply"
+    );
+    writer
+        .execute_batch(
+            "UPDATE activity_records SET payload=json_set(payload,'$.durationEstimate',3);",
+        )
+        .unwrap();
+    for _ in 0..100 {
+        runtime.request(false);
+    }
+    synced(&runtime, 2);
+    assert!(runtime.wait_idle(Duration::from_secs(3)));
+    assert_eq!(runtime.status().revision, 2);
+    assert_eq!(runtime.period(0, 10000).unwrap().records[0].end, 4000);
+    writer
+        .execute_batch("INSERT INTO agent_events VALUES(1);")
+        .unwrap();
+    runtime.request(false);
+    synced(&runtime, 3);
+    assert_eq!(runtime.period(0, 10000).unwrap().records[0].end, 4000);
+    runtime.request(true);
+    synced(&runtime, 4);
+    assert_eq!(runtime.period(0, 10000).unwrap().records.len(), 1);
+}
