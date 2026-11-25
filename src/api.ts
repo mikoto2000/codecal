@@ -1,7 +1,22 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Bootstrap, Config, Snapshot } from "./types";
+import type {
+  Bootstrap,
+  Config,
+  Snapshot,
+  HumanActivityResponse,
+  HumanSyncStatus,
+  HumanClearResult,
+} from "./types";
 export const api = {
+  humanActivity: (from: number, to: number) =>
+    invoke<HumanActivityResponse>("human_activity", { from, to }),
+  humanStatus: () => invoke<HumanSyncStatus>("human_status"),
+  humanSync: () => invoke<void>("sync_human"),
+  humanClear: (all: boolean) =>
+    invoke<HumanClearResult>("clear_human_activity", { all }),
+  humanEvents: (changed: (status: HumanSyncStatus) => void) =>
+    listen<HumanSyncStatus>("human-status", (event) => changed(event.payload)),
   boot: () =>
     invoke<Bootstrap>("bootstrap", {
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,

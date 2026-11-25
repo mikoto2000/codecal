@@ -35,6 +35,7 @@ export type Config = {
   claude_enabled?: boolean;
   claude_root?: string;
   rei_enabled: boolean;
+  human_activity_enabled?: boolean;
   rei_root: string;
   timezone: string;
   week_start: number;
@@ -48,3 +49,35 @@ export type Bootstrap = {
   first_run: boolean;
   notices: string[];
 };
+export type HumanActivityKind =
+  "entertainment" | "non_entertainment" | "unknown";
+export type HumanActivity = {
+  start: number;
+  end: number;
+  kind: HumanActivityKind;
+};
+export type HumanActivityDiagnostic = {
+  code:
+    | "invalid_json"
+    | "payload_too_large"
+    | "invalid_payload_type"
+    | "invalid_duration_type"
+    | "invalid_duration"
+    | "invalid_timestamp"
+    | "invalid_id"
+    | "long_estimate"
+    | "simultaneous_conflict";
+  count: number;
+};
+export type HumanActivityResponse = {
+  records: HumanActivity[];
+  diagnostics: HumanActivityDiagnostic[];
+};
+export type HumanSyncStatus = {
+  generation: number;
+  busy: boolean;
+  revision: number;
+  error: string | null;
+  last_success: number | null;
+};
+export type HumanClearResult = { compacted: boolean; staging_cleared: boolean };
