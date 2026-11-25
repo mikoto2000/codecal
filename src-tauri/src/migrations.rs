@@ -187,15 +187,15 @@ pub(crate) fn migrate(
     // v2 -> v3: establish a validated compatibility baseline. The historical
     // claude_files cache is optional and is deliberately left untouched.
     tx.execute_batch("CREATE TABLE IF NOT EXISTS human_activity_sources(
-        source_id TEXT PRIMARY KEY,source_path TEXT NOT NULL,file_identity TEXT NOT NULL,
+        source_id BLOB PRIMARY KEY,source_path TEXT NOT NULL,file_identity TEXT NOT NULL,
         reader_version INTEGER NOT NULL,last_sync INTEGER NOT NULL,
         sync_status TEXT NOT NULL,diagnostics TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS human_activity_records(
-        source_id TEXT NOT NULL REFERENCES human_activity_sources(source_id) ON DELETE CASCADE,
+        source_id BLOB NOT NULL REFERENCES human_activity_sources(source_id) ON DELETE CASCADE,
         native_id TEXT NOT NULL,captured_at INTEGER NOT NULL,duration_ms INTEGER NOT NULL CHECK(duration_ms>=0),
         kind TEXT NOT NULL CHECK(kind IN ('entertainment','non_entertainment','unknown')),
-        content_hash TEXT NOT NULL,effective_end INTEGER,
-        PRIMARY KEY(source_id,native_id));
+        content_hash BLOB NOT NULL,effective_end INTEGER,
+        PRIMARY KEY(source_id,native_id)) WITHOUT ROWID;
         CREATE INDEX IF NOT EXISTS human_activity_start ON human_activity_records(source_id,captured_at,native_id);
         CREATE INDEX IF NOT EXISTS human_activity_end ON human_activity_records(source_id,effective_end);
         CREATE INDEX IF NOT EXISTS human_activity_source_path ON human_activity_sources(source_path,last_sync);").map_err(err)?;

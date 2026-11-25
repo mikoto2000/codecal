@@ -1,6 +1,7 @@
 //! Minimized Rei observation reader. Original payloads never cross SQLite's boundary.
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashSet},
     fmt,
@@ -11,6 +12,16 @@ use std::{
 
 const MIN_TIME: i64 = -62_135_596_800_000;
 const MAX_TIME: i64 = 253_402_300_799_999;
+
+fn validate_source_schema(conn: &Connection) -> Result<(), HumanError> {
+    let ordinary: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_list WHERE schema='main' AND name='activity_records' AND type='table' AND wr=0)",[],|r|r.get(0)).map_err(|_|HumanError("unsupported_source"))?;
+    let columns: i64 = conn.query_row("SELECT count(*) FROM pragma_table_xinfo('activity_records') WHERE hidden=0 AND ((name='id' AND upper(type)='TEXT' AND pk=1) OR (name='captured_at' AND upper(type)='INTEGER') OR (name='payload' AND upper(type)='TEXT'))",[],|r|r.get(0)).map_err(|_|HumanError("unsupported_source"))?;
+    let shadows: i64 = conn.query_row("SELECT count(*) FROM pragma_table_xinfo('activity_records') WHERE lower(name) IN ('rowid','_rowid_','oid')",[],|r|r.get(0)).map_err(|_|HumanError("unsupported_source"))?;
+    if !ordinary || columns != 3 || shadows != 0 {
+        return Err(HumanError("unsupported_source"));
+    }
+    Ok(())
+}
 
 #[cfg(windows)]
 fn identity(file: &File) -> Result<String, HumanError> {
@@ -75,6 +86,163 @@ impl std::error::Error for HumanError {}
 fn cache_read_error(_: rusqlite::Error) -> HumanError {
     HumanError("cache_read_failed")
 }
+fn cache_write_error(_: rusqlite::Error) -> HumanError {
+    HumanError("cache_write_failed")
+}
+struct CachedObservation {
+    id: String,
+    start: i64,
+    hash: Option<Vec<u8>>,
+}
+fn next_cached(rows: &mut rusqlite::Rows<'_>) -> Result<Option<CachedObservation>, HumanError> {
+    rows.next()
+        .map_err(cache_write_error)?
+        .map(|row| {
+            Ok(CachedObservation {
+                id: row.get(0).map_err(cache_write_error)?,
+                start: row.get(1).map_err(cache_write_error)?,
+                hash: row.get(2).map_err(cache_write_error)?,
+            })
+        })
+        .transpose()
+}
+fn source_key(conn: &Connection, label: &str) -> Result<rusqlite::types::Value, HumanError> {
+    use rusqlite::types::Value;
+    let key = if label.len() == 64 && label.bytes().all(|b| b.is_ascii_hexdigit()) {
+        fn digit(b: u8) -> u8 {
+            if b.is_ascii_digit() {
+                b - b'0'
+            } else {
+                (b | 32) - b'a' + 10
+            }
+        }
+        Value::Blob(
+            label
+                .as_bytes()
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|b| digit(b[0]) * 16 + digit(b[1]))
+                .collect(),
+        )
+    } else {
+        Value::Text(label.to_owned())
+    };
+    Ok(conn.query_row("SELECT source_id FROM human_activity_sources WHERE source_id=?1 OR source_id=?2 ORDER BY typeof(source_id) LIMIT 1",params![&key,label],|r|r.get::<_,Value>(0)).optional().map_err(cache_read_error)?.unwrap_or(key))
+}
+
+struct PendingInterval {
+    id: String,
+    start: i64,
+    candidate_end: i64,
+    old_end: Option<i64>,
+    kind: String,
+}
+
+fn queue_end(
+    insert: &mut rusqlite::Statement<'_>,
+    record: &PendingInterval,
+    end: Option<i64>,
+) -> Result<(), HumanError> {
+    if record.old_end != end {
+        insert
+            .execute(params![record.id, end])
+            .map_err(cache_write_error)?;
+    }
+    Ok(())
+}
+
+fn resolve_all(
+    tx: &Connection,
+    source: &rusqlite::types::Value,
+    cancelled: &impl Fn() -> bool,
+) -> Result<u64, HumanError> {
+    tx.execute_batch(
+        "CREATE TEMP TABLE human_ends(native_id TEXT PRIMARY KEY,effective_end INTEGER);",
+    )
+    .map_err(cache_write_error)?;
+    let mut conflicts = 0;
+    {
+        let mut query = tx.prepare("SELECT native_id,captured_at,duration_ms,effective_end,kind FROM human_activity_records INDEXED BY human_activity_start WHERE source_id=? ORDER BY captured_at,native_id").map_err(cache_write_error)?;
+        let mut rows = query.query([source]).map_err(cache_write_error)?;
+        let mut insert = tx
+            .prepare("INSERT INTO human_ends VALUES(?,?)")
+            .map_err(cache_write_error)?;
+        let mut pending: Option<PendingInterval> = None;
+        let mut conflict = false;
+        let mut count = 0;
+        while let Some(row) = rows.next().map_err(cache_write_error)? {
+            count += 1;
+            if count % 256 == 0 && cancelled() {
+                return Err(HumanError("sync_cancelled"));
+            }
+            let start: i64 = row.get(1).map_err(cache_write_error)?;
+            let duration: i64 = row.get(2).map_err(cache_write_error)?;
+            let current = PendingInterval {
+                id: row.get(0).map_err(cache_write_error)?,
+                start,
+                candidate_end: start
+                    .checked_add(duration)
+                    .ok_or(HumanError("cache_write_failed"))?,
+                old_end: row.get(3).map_err(cache_write_error)?,
+                kind: row.get(4).map_err(cache_write_error)?,
+            };
+            if let Some(previous) = pending.take() {
+                if previous.start == current.start {
+                    conflict |= previous.kind != current.kind;
+                    queue_end(&mut insert, &previous, None)?;
+                } else {
+                    queue_end(
+                        &mut insert,
+                        &previous,
+                        Some(previous.candidate_end.min(current.start)),
+                    )?;
+                    conflicts += u64::from(conflict);
+                    conflict = false;
+                }
+            }
+            pending = Some(current);
+        }
+        if let Some(last) = pending {
+            queue_end(&mut insert, &last, Some(last.candidate_end))?;
+            conflicts += u64::from(conflict);
+        }
+    }
+    tx.execute("UPDATE human_activity_records SET effective_end=(SELECT effective_end FROM human_ends e WHERE e.native_id=human_activity_records.native_id) WHERE source_id=? AND native_id IN (SELECT native_id FROM human_ends)",[source]).map_err(cache_write_error)?;
+    tx.execute_batch("DROP TABLE human_ends;")
+        .map_err(cache_write_error)?;
+    Ok(conflicts)
+}
+
+fn conflict_at(
+    conn: &Connection,
+    source: &rusqlite::types::Value,
+    time: i64,
+) -> Result<u64, HumanError> {
+    let count: i64 = conn.query_row("SELECT count(DISTINCT kind) FROM human_activity_records WHERE source_id=? AND captured_at=?",params![source,time],|r|r.get(0)).map_err(cache_write_error)?;
+    Ok(u64::from(count > 1))
+}
+
+fn resolve_times(
+    tx: &Connection,
+    source: &rusqlite::types::Value,
+    times: &HashSet<i64>,
+) -> Result<(), HumanError> {
+    let mut affected = times.clone();
+    for time in times {
+        let previous: Option<i64> = tx.query_row("SELECT max(captured_at) FROM human_activity_records WHERE source_id=? AND captured_at<?",params![source,time],|r|r.get(0)).map_err(cache_write_error)?;
+        if let Some(time) = previous {
+            affected.insert(time);
+        }
+    }
+    let mut update = tx.prepare("UPDATE human_activity_records SET effective_end=CASE WHEN native_id=(SELECT max(r.native_id) FROM human_activity_records r WHERE r.source_id=?1 AND r.captured_at=?2) THEN min(captured_at+duration_ms,coalesce((SELECT min(r.captured_at) FROM human_activity_records r WHERE r.source_id=?1 AND r.captured_at>?2),captured_at+duration_ms)) ELSE NULL END WHERE source_id=?1 AND captured_at=?2").map_err(cache_write_error)?;
+    for time in affected {
+        update
+            .execute(params![source, time])
+            .map_err(cache_write_error)?;
+    }
+    Ok(())
+}
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -108,7 +276,6 @@ pub struct HumanActivityResponse {
 
 // The normalized staging database is private and discarded after cache commit.
 pub struct HumanStage {
-    conn: Connection,
     _file: tempfile::NamedTempFile,
     source_id: String,
     source_path: String,
@@ -152,9 +319,9 @@ pub struct HumanReader {
 }
 impl HumanReader {
     pub fn open(path: &Path) -> Result<Self, HumanError> {
-        let path = path
-            .canonicalize()
-            .map_err(|_| HumanError("source_unavailable"))?;
+        // Preserve the selected logical path: resolving a junction/symlink once
+        // would hide later changes to its target from identity checks.
+        let path = std::path::absolute(path).map_err(|_| HumanError("source_unavailable"))?;
         let file = File::open(&path).map_err(|_| HumanError("source_unavailable"))?;
         let file_identity = identity(&file)?;
         let source_path = path.to_string_lossy().to_string();
@@ -167,6 +334,9 @@ impl HumanReader {
             .map_err(|_| HumanError("source_unavailable"))?;
         conn.pragma_update(None, "query_only", true)
             .map_err(|_| HumanError("source_unavailable"))?;
+        conn.pragma_update(None, "trusted_schema", false)
+            .map_err(|_| HumanError("source_unavailable"))?;
+        validate_source_schema(&conn)?;
         conn.prepare("SELECT rowid,id,captured_at,payload FROM activity_records LIMIT 0")
             .map_err(|_| HumanError("unsupported_source"))?;
         let reader = Self {
@@ -208,7 +378,7 @@ impl HumanReader {
         let version = self.data_version()?;
         let file = tempfile::NamedTempFile::new().map_err(|_| HumanError("staging_failed"))?;
         let conn = Connection::open(file.path()).map_err(|_| HumanError("staging_failed"))?;
-        conn.execute_batch("PRAGMA cache_size=-2048; CREATE TABLE records(native_id TEXT PRIMARY KEY,captured_at INTEGER,duration_ms INTEGER,kind TEXT,content_hash TEXT);").map_err(|_| HumanError("staging_failed"))?;
+        conn.execute_batch("PRAGMA cache_size=-2048; CREATE TABLE records(native_id TEXT PRIMARY KEY,captured_at INTEGER,duration_ms INTEGER,kind TEXT,content_hash BLOB) WITHOUT ROWID;").map_err(|_| HumanError("staging_failed"))?;
         let staging = conn
             .unchecked_transaction()
             .map_err(|_| HumanError("staging_failed"))?;
@@ -216,8 +386,12 @@ impl HumanReader {
             .conn
             .unchecked_transaction()
             .map_err(|_| HumanError("source_read_failed"))?;
+        validate_source_schema(&snapshot)?;
         let mut counts = BTreeMap::new();
         let mut cursor = None;
+        let mut insert = staging
+            .prepare("INSERT INTO records VALUES(?,?,?,?,?)")
+            .map_err(|_| HumanError("staging_failed"))?;
         loop {
             check()?;
             let page = self.read_page(cursor)?;
@@ -242,20 +416,18 @@ impl HumanReader {
                     HumanKind::NonEntertainment => "non_entertainment",
                     HumanKind::Unknown => "unknown",
                 };
-                staging
-                    .execute(
-                        "INSERT INTO records VALUES(?,?,?,?,?)",
-                        params![
-                            record.native_id,
-                            record.captured_at,
-                            record.duration_ms,
-                            kind,
-                            crate::store::hash(content)
-                        ],
-                    )
+                insert
+                    .execute(params![
+                        record.native_id,
+                        record.captured_at,
+                        record.duration_ms,
+                        kind,
+                        Sha256::digest(content).to_vec()
+                    ])
                     .map_err(|_| HumanError("staging_failed"))?;
             }
         }
+        drop(insert);
         check()?;
         snapshot
             .commit()
@@ -266,7 +438,6 @@ impl HumanReader {
         #[cfg(windows)]
         let source_path = source_path.to_lowercase();
         Ok(HumanStage {
-            conn,
             _file: file,
             source_id: self.source_id.clone(),
             source_path,
@@ -368,6 +539,68 @@ impl HumanReader {
 }
 
 impl crate::store::Store {
+    fn prepare_human_changes(
+        &self,
+        stage: &HumanStage,
+        key: &rusqlite::types::Value,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<usize, HumanError> {
+        self.conn.execute_batch("PRAGMA temp_store=FILE; DROP TABLE IF EXISTS temp.human_changes;
+            CREATE TEMP TABLE human_changes(native_id TEXT PRIMARY KEY,old_start INTEGER,captured_at INTEGER,duration_ms INTEGER,kind TEXT,content_hash BLOB) WITHOUT ROWID;").map_err(cache_write_error)?;
+        // Merge two ordered streams of allowed fields. Neither the original
+        // database nor a staging database is attached to the application cache.
+        let staged =
+            Connection::open_with_flags(stage._file.path(), OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .map_err(|_| HumanError("staging_failed"))?;
+        let mut query = staged.prepare("SELECT native_id,captured_at,duration_ms,kind,content_hash FROM records ORDER BY native_id").map_err(|_|HumanError("staging_failed"))?;
+        let mut rows = query.query([]).map_err(|_| HumanError("staging_failed"))?;
+        let changes = self
+            .conn
+            .unchecked_transaction()
+            .map_err(cache_write_error)?;
+        let mut cached_query = changes.prepare("SELECT native_id,captured_at,CASE WHEN typeof(content_hash)='blob' AND length(content_hash)=32 THEN content_hash WHEN typeof(content_hash)='text' AND octet_length(content_hash)=64 THEN unhex(content_hash) END FROM human_activity_records WHERE source_id=? ORDER BY native_id").map_err(cache_write_error)?;
+        let mut cached_rows = cached_query.query([key]).map_err(cache_write_error)?;
+        let mut old = next_cached(&mut cached_rows)?;
+        let mut insert = changes
+            .prepare("INSERT INTO human_changes VALUES(?,?,?,?,?,?)")
+            .map_err(cache_write_error)?;
+        let mut changed = 0;
+        let mut count = 0;
+        while let Some(row) = rows.next().map_err(|_| HumanError("staging_failed"))? {
+            count += 1;
+            if count % 256 == 0 && cancelled() {
+                return Err(HumanError("sync_cancelled"));
+            }
+            let id: String = row.get(0).map_err(|_| HumanError("staging_failed"))?;
+            while old.as_ref().is_some_and(|r| r.id.as_str() < id.as_str()) {
+                old = next_cached(&mut cached_rows)?;
+            }
+            let prior = old.as_ref().filter(|r| r.id == id);
+            let hash: Vec<u8> = row.get(4).map_err(|_| HumanError("staging_failed"))?;
+            if prior.is_some_and(|r| r.hash.as_deref() == Some(hash.as_slice())) {
+                continue;
+            }
+            let start: i64 = row.get(1).map_err(|_| HumanError("staging_failed"))?;
+            let duration: i64 = row.get(2).map_err(|_| HumanError("staging_failed"))?;
+            let kind: String = row.get(3).map_err(|_| HumanError("staging_failed"))?;
+            insert
+                .execute(params![
+                    id,
+                    prior.map(|r| r.start),
+                    start,
+                    duration,
+                    kind,
+                    hash
+                ])
+                .map_err(cache_write_error)?;
+            changed += 1;
+        }
+        drop(insert);
+        drop(cached_rows);
+        drop(cached_query);
+        changes.commit().map_err(cache_write_error)?;
+        Ok(changed)
+    }
     pub fn apply_human_stage(
         &mut self,
         stage: &HumanStage,
@@ -376,67 +609,105 @@ impl crate::store::Store {
         if cancelled() {
             return Err(HumanError("sync_cancelled"));
         }
+        let key = source_key(&self.conn, &stage.source_id)?;
+        let changed = self.prepare_human_changes(stage, &key, &cancelled)?;
+        if cancelled() {
+            return Err(HumanError("sync_cancelled"));
+        }
         let mut write = || -> Result<(), HumanError> {
             let tx = self
                 .conn
                 .transaction()
                 .map_err(|_| HumanError("cache_write_failed"))?;
-            tx.execute("INSERT INTO human_activity_sources VALUES(?,?,?,?,?,'synced',?) ON CONFLICT(source_id) DO UPDATE SET reader_version=excluded.reader_version,last_sync=excluded.last_sync,sync_status=excluded.sync_status,diagnostics=excluded.diagnostics", params![stage.source_id, stage.source_path, stage.file_identity, 1, chrono::Utc::now().timestamp_millis(), serde_json::to_string(&stage.diagnostics).map_err(|_| HumanError("cache_write_failed"))?]).map_err(|_| HumanError("cache_write_failed"))?;
-            {
-                let mut query = stage
-                    .conn
-                    .prepare(
-                        "SELECT native_id,captured_at,duration_ms,kind,content_hash FROM records",
-                    )
-                    .map_err(|_| HumanError("staging_failed"))?;
-                let mut rows = query.query([]).map_err(|_| HumanError("staging_failed"))?;
-                let mut insert = tx.prepare("INSERT INTO human_activity_records VALUES(?,?,?,?,?,?,NULL) ON CONFLICT(source_id,native_id) DO UPDATE SET captured_at=excluded.captured_at,duration_ms=excluded.duration_ms,kind=excluded.kind,content_hash=excluded.content_hash WHERE content_hash<>excluded.content_hash").map_err(|_| HumanError("cache_write_failed"))?;
-                while let Some(row) = rows.next().map_err(|_| HumanError("staging_failed"))? {
-                    if cancelled() {
-                        return Err(HumanError("sync_cancelled"));
+            let previous: Option<String> = tx
+                .query_row(
+                    "SELECT diagnostics FROM human_activity_sources WHERE source_id=?",
+                    [&key],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(cache_write_error)?;
+            let prior_diags: Vec<HumanDiagnostic> = previous
+                .map(|s| serde_json::from_str(&s))
+                .transpose()
+                .map_err(|_| HumanError("cache_write_failed"))?
+                .unwrap_or_default();
+            let mut conflicts = prior_diags
+                .iter()
+                .find(|d| d.code == DiagnosticCode::SimultaneousConflict)
+                .map_or(0, |d| d.count);
+            let mut times = HashSet::new();
+            if changed <= 4096 {
+                let mut query = tx
+                    .prepare("SELECT old_start,captured_at FROM human_changes")
+                    .map_err(cache_write_error)?;
+                let mut rows = query.query([]).map_err(cache_write_error)?;
+                while let Some(row) = rows.next().map_err(cache_write_error)? {
+                    if let Some(time) = row.get::<_, Option<i64>>(0).map_err(cache_write_error)? {
+                        times.insert(time);
                     }
-                    let id: String = row.get(0).map_err(|_| HumanError("staging_failed"))?;
-                    let start: i64 = row.get(1).map_err(|_| HumanError("staging_failed"))?;
-                    let duration: i64 = row.get(2).map_err(|_| HumanError("staging_failed"))?;
-                    let kind: String = row.get(3).map_err(|_| HumanError("staging_failed"))?;
-                    let hash: String = row.get(4).map_err(|_| HumanError("staging_failed"))?;
-                    insert
-                        .execute(params![stage.source_id, id, start, duration, kind, hash])
-                        .map_err(|_| HumanError("cache_write_failed"))?;
+                    times.insert(row.get::<_, i64>(1).map_err(cache_write_error)?);
+                }
+                for time in &times {
+                    conflicts = conflicts.saturating_sub(conflict_at(&tx, &key, *time)?);
                 }
             }
-            tx.execute_batch("CREATE TEMP TABLE human_resolved(native_id TEXT PRIMARY KEY,effective_end INTEGER);").map_err(|_| HumanError("cache_write_failed"))?;
-            tx.execute("INSERT INTO human_resolved WITH ranked AS (
-                SELECT native_id,captured_at,duration_ms,row_number() OVER(PARTITION BY captured_at ORDER BY native_id DESC) AS rank FROM human_activity_records WHERE source_id=?),
-                representatives AS (SELECT native_id,captured_at,duration_ms,lead(captured_at) OVER(ORDER BY captured_at) AS next_start FROM ranked WHERE rank=1)
-                SELECT native_id,min(captured_at+duration_ms,coalesce(next_start,captured_at+duration_ms)) FROM representatives", [&stage.source_id]).map_err(|_| HumanError("cache_write_failed"))?;
-            tx.execute("UPDATE human_activity_records SET effective_end=(SELECT effective_end FROM human_resolved r WHERE r.native_id=human_activity_records.native_id) WHERE source_id=? AND effective_end IS NOT (SELECT effective_end FROM human_resolved r WHERE r.native_id=human_activity_records.native_id)", [&stage.source_id]).map_err(|_| HumanError("cache_write_failed"))?;
-            tx.execute_batch("DROP TABLE human_resolved;")
-                .map_err(|_| HumanError("cache_write_failed"))?;
-            let conflicts: i64 = tx.query_row("SELECT count(*) FROM (SELECT captured_at FROM human_activity_records WHERE source_id=? GROUP BY captured_at HAVING count(DISTINCT kind)>1)", [&stage.source_id], |r| r.get(0)).map_err(|_| HumanError("cache_write_failed"))?;
-            if conflicts > 0 {
-                let mut counts = stage
-                    .diagnostics
-                    .iter()
-                    .map(|d| (d.code, d.count))
-                    .collect::<BTreeMap<_, _>>();
-                counts.insert(DiagnosticCode::SimultaneousConflict, conflicts as u64);
-                tx.execute(
-                    "UPDATE human_activity_sources SET diagnostics=? WHERE source_id=?",
-                    params![
-                        serde_json::to_string(&diagnostics(counts))
-                            .map_err(|_| HumanError("cache_write_failed"))?,
-                        stage.source_id
-                    ],
-                )
-                .map_err(|_| HumanError("cache_write_failed"))?;
+            tx.execute("INSERT INTO human_activity_sources VALUES(?,?,?,?,?,'synced','[]') ON CONFLICT(source_id) DO UPDATE SET reader_version=excluded.reader_version,last_sync=excluded.last_sync,sync_status=excluded.sync_status",params![&key,stage.source_path,stage.file_identity,1,chrono::Utc::now().timestamp_millis()]).map_err(cache_write_error)?;
+            let build_indexes = changed > 4096
+                && !tx
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM human_activity_records LIMIT 1)",
+                        [],
+                        |r| r.get::<_, bool>(0),
+                    )
+                    .map_err(cache_write_error)?;
+            if build_indexes {
+                tx.execute_batch("DROP INDEX human_activity_start; DROP INDEX human_activity_end;")
+                    .map_err(cache_write_error)?;
             }
+            tx.execute("INSERT INTO human_activity_records SELECT ?,native_id,captured_at,duration_ms,kind,content_hash,captured_at+duration_ms FROM human_changes WHERE true ON CONFLICT(source_id,native_id) DO UPDATE SET captured_at=excluded.captured_at,duration_ms=excluded.duration_ms,kind=excluded.kind,content_hash=excluded.content_hash,effective_end=excluded.effective_end WHERE content_hash<>excluded.content_hash",[&key]).map_err(cache_write_error)?;
+            if build_indexes {
+                tx.execute_batch("CREATE INDEX human_activity_start ON human_activity_records(source_id,captured_at,native_id);").map_err(cache_write_error)?;
+            }
+            if changed > 4096 {
+                conflicts = resolve_all(&tx, &key, &cancelled)?;
+            } else if changed > 0 {
+                resolve_times(&tx, &key, &times)?;
+                for time in &times {
+                    conflicts += conflict_at(&tx, &key, *time)?;
+                }
+            }
+            if build_indexes {
+                tx.execute_batch("CREATE INDEX human_activity_end ON human_activity_records(source_id,effective_end);").map_err(cache_write_error)?;
+            }
+            let mut counts = stage
+                .diagnostics
+                .iter()
+                .map(|d| (d.code, d.count))
+                .collect::<BTreeMap<_, _>>();
+            if conflicts > 0 {
+                counts.insert(DiagnosticCode::SimultaneousConflict, conflicts);
+            }
+            tx.execute(
+                "UPDATE human_activity_sources SET diagnostics=? WHERE source_id=?",
+                params![
+                    serde_json::to_string(&diagnostics(counts))
+                        .map_err(|_| HumanError("cache_write_failed"))?,
+                    &key
+                ],
+            )
+            .map_err(cache_write_error)?;
             if cancelled() {
                 return Err(HumanError("sync_cancelled"));
             }
             tx.commit().map_err(|_| HumanError("cache_write_failed"))
         };
-        write()
+        let result = write();
+        // This is disposable normalized data, not part of committed cache state.
+        let _ = self
+            .conn
+            .execute_batch("DROP TABLE IF EXISTS temp.human_changes;");
+        result
     }
     pub fn human_activity(
         &self,
@@ -456,11 +727,12 @@ impl crate::store::Store {
             let mut seen = HashSet::new();
             let mut counts = BTreeMap::new();
             for source in sources {
+                let key = source_key(&self.conn, source)?;
                 let raw: Option<String> = self
                     .conn
                     .query_row(
                         "SELECT diagnostics FROM human_activity_sources WHERE source_id=?",
-                        [source],
+                        [&key],
                         |r| r.get(0),
                     )
                     .optional()
@@ -473,9 +745,9 @@ impl crate::store::Store {
                 for d in ds {
                     *counts.entry(d.code).or_insert(0) += d.count;
                 }
-                let mut query = self.conn.prepare("SELECT native_id,content_hash,captured_at,effective_end,kind FROM human_activity_records WHERE source_id=? AND captured_at<? AND (effective_end>? OR (effective_end=captured_at AND captured_at>=?)) ORDER BY captured_at,native_id").map_err(cache_read_error)?;
+                let mut query = self.conn.prepare("SELECT native_id,CASE WHEN typeof(content_hash)='blob' THEN hex(content_hash) ELSE upper(content_hash) END,captured_at,effective_end,kind FROM human_activity_records WHERE source_id=? AND captured_at<? AND (effective_end>? OR (effective_end=captured_at AND captured_at>=?)) ORDER BY captured_at,native_id").map_err(cache_read_error)?;
                 let mut rows = query
-                    .query(params![source, to, from, from])
+                    .query(params![&key, to, from, from])
                     .map_err(cache_read_error)?;
                 while let Some(row) = rows.next().map_err(cache_read_error)? {
                     let id: String = row.get(0).map_err(cache_read_error)?;
@@ -525,8 +797,8 @@ mod privacy_tests {
             .windows(b"foreground".len())
             .any(|w| w == b"foreground"));
         assert_eq!(
-            stage
-                .conn
+            Connection::open(stage._file.path())
+                .unwrap()
                 .query_row("SELECT kind FROM records", [], |r| r.get::<_, String>(0))
                 .unwrap(),
             "unknown"

@@ -462,10 +462,13 @@ fn source_errors_are_fixed_codes_and_ai_only_sources_are_unsupported() {
 fn privacy_outputs_and_logs_do_not_contain_the_synthetic_secret() {
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "human_privacy_child", "--nocapture"])
-        .env("CODECAL_HUMAN_PRIVACY_CHILD", "1")
         .output()
         .unwrap();
     assert!(output.status.success(), "isolated privacy scenario failed");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "isolated privacy scenario did not execute"
+    );
     for bytes in [&output.stdout, &output.stderr] {
         for marker in [
             b"PRIVATE_HUMAN_MARKER".as_slice(),
@@ -481,9 +484,6 @@ fn privacy_outputs_and_logs_do_not_contain_the_synthetic_secret() {
 
 #[test]
 fn human_privacy_child() {
-    if std::env::var_os("CODECAL_HUMAN_PRIVACY_CHILD").is_none() {
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("source.db");
     let cache = tmp.path().join("cache.db");
@@ -533,21 +533,33 @@ fn human_privacy_child() {
         .contains("PRIVATE_HUMAN_MARKER"));
     let conn = Connection::open(&cache).unwrap();
     let hash: String = conn
-        .query_row("SELECT content_hash FROM human_activity_records", [], |r| {
-            r.get(0)
-        })
+        .query_row(
+            "SELECT hex(content_hash) FROM human_activity_records",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     writer.execute("UPDATE activity_records SET payload=? WHERE id='observation'",["{\"durationEstimate\":2,\"foreground\":{\"title\":\"PRIVATE_HUMAN_MARKER_CHANGED\"},\"detection\":{\"diagnostics\":{\"entertainmentDisposition\":\"PRIVATE_HUMAN_MARKER_CHANGED\"}}}"]).unwrap();
     store
         .apply_human_stage(&reader.stage(|| false).unwrap(), || false)
         .unwrap();
     assert_eq!(
-        conn.query_row("SELECT content_hash FROM human_activity_records", [], |r| r
-            .get::<_, String>(0))
-            .unwrap(),
+        conn.query_row(
+            "SELECT hex(content_hash) FROM human_activity_records",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
         hash
     );
     conn.execute_batch("CREATE TRIGGER reject_human BEFORE INSERT ON human_activity_records BEGIN SELECT RAISE(ABORT,'PRIVATE_ERROR_MARKER'); END;").unwrap();
+    // Exercise a real normalized delta; unchanged rows no longer issue writes.
+    writer
+        .execute(
+            "UPDATE activity_records SET payload='{\"durationEstimate\":3}' WHERE id='observation'",
+            [],
+        )
+        .unwrap();
     let error = store
         .apply_human_stage(&reader.stage(|| false).unwrap(), || false)
         .unwrap_err();
@@ -653,6 +665,170 @@ fn periods_include_prior_overlap_but_exclude_the_end_and_do_not_change_effective
             .unwrap_err()
             .to_string(),
         "invalid_period"
+    );
+}
+
+#[test]
+fn large_import_and_small_timestamp_updates_obey_the_same_interval_and_conflict_rules() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("source.db");
+    let writer = Connection::open(&path).unwrap();
+    writer.execute_batch("CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT);
+        WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<4999)
+        INSERT INTO activity_records SELECT printf('id-%d',x),x*1000,'{\"durationEstimate\":2}' FROM n;
+        INSERT INTO activity_records VALUES('zz-tie',1000,'{\"durationEstimate\":0,\"detection\":{\"diagnostics\":{\"entertainmentDisposition\":\"ENTERTAINMENT\"}}}');").unwrap();
+    let reader = HumanReader::open(&path).unwrap();
+    let sources = [reader.source_id().to_owned()];
+    let mut store = Store::open(&tmp.path().join("cache.db")).unwrap();
+    store
+        .apply_human_stage(&reader.stage(|| false).unwrap(), || false)
+        .unwrap();
+    let first = store.human_activity(&sources, 0, 6_000_000).unwrap();
+    assert_eq!(first.records.len(), 5000);
+    assert_eq!((first.records[0].start, first.records[0].end), (0, 1000));
+    assert_eq!(
+        (
+            first.records[1].start,
+            first.records[1].end,
+            first.records[1].kind
+        ),
+        (1000, 1000, HumanKind::Entertainment)
+    );
+    assert_eq!(first.records.last().unwrap().end, 5_001_000);
+    assert_eq!(
+        first
+            .diagnostics
+            .iter()
+            .find(|d| d.code == DiagnosticCode::SimultaneousConflict)
+            .unwrap()
+            .count,
+        1
+    );
+    writer
+        .execute_batch("UPDATE activity_records SET captured_at=2500 WHERE id='zz-tie';")
+        .unwrap();
+    store
+        .apply_human_stage(&reader.stage(|| false).unwrap(), || false)
+        .unwrap();
+    let next = store.human_activity(&sources, 0, 6_000_000).unwrap();
+    assert_eq!(next.records.len(), 5001);
+    assert_eq!(
+        next.records.iter().find(|r| r.start == 1000).unwrap().end,
+        2000
+    );
+    assert_eq!(
+        next.records.iter().find(|r| r.start == 2000).unwrap().end,
+        2500
+    );
+    assert_eq!(
+        next.records.iter().find(|r| r.start == 2500).unwrap().end,
+        2500
+    );
+    assert!(!next
+        .diagnostics
+        .iter()
+        .any(|d| d.code == DiagnosticCode::SimultaneousConflict));
+}
+
+#[test]
+fn changing_a_directory_link_is_detected_even_when_the_old_database_still_exists() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = tmp.path().join("a");
+    let b = tmp.path().join("b");
+    let link = tmp.path().join("selected");
+    for root in [&a, &b] {
+        std::fs::create_dir(root).unwrap();
+        Connection::open(root.join("storage.db")).unwrap().execute_batch("CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT);").unwrap();
+    }
+    fn directory_link(target: &std::path::Path, link: &std::path::Path) {
+        #[cfg(windows)]
+        assert!(
+            std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .unwrap()
+                .status
+                .success(),
+            "cannot create synthetic junction"
+        );
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).unwrap();
+    }
+    directory_link(&a, &link);
+    let reader = HumanReader::open(&link.join("storage.db")).unwrap();
+    #[cfg(windows)]
+    std::fs::remove_dir(&link).unwrap();
+    #[cfg(unix)]
+    std::fs::remove_file(&link).unwrap();
+    directory_link(&b, &link);
+    assert_eq!(
+        reader.verify_identity().unwrap_err().to_string(),
+        "source_replaced"
+    );
+    assert_ne!(
+        HumanReader::open(&link.join("storage.db"))
+            .unwrap()
+            .source_id(),
+        reader.source_id()
+    );
+}
+
+#[test]
+fn failed_large_first_import_restores_indexes_and_an_empty_cache_before_retry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("source.db");
+    let cache = tmp.path().join("cache.db");
+    let writer = Connection::open(&path).unwrap();
+    writer.execute_batch("CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT);
+        WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<5000)
+        INSERT INTO activity_records SELECT printf('id-%d',x),x*1000,'{\"durationEstimate\":1}' FROM n;").unwrap();
+    let reader = HumanReader::open(&path).unwrap();
+    let stage = reader.stage(|| false).unwrap();
+    let mut store = Store::open(&cache).unwrap();
+    let conn = Connection::open(&cache).unwrap();
+    conn.execute_batch("CREATE TRIGGER reject_human BEFORE INSERT ON human_activity_records BEGIN SELECT RAISE(ABORT,'SYNTHETIC_FAILURE'); END;").unwrap();
+    assert_eq!(
+        store
+            .apply_human_stage(&stage, || false)
+            .unwrap_err()
+            .to_string(),
+        "cache_write_failed"
+    );
+    assert_eq!(conn.query_row("SELECT count(*) FROM sqlite_master WHERE type='index' AND name IN ('human_activity_start','human_activity_end')",[],|r|r.get::<_,i64>(0)).unwrap(),2);
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM human_activity_records", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM human_activity_sources", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    conn.execute_batch("DROP TRIGGER reject_human;").unwrap();
+    store.apply_human_stage(&stage, || false).unwrap();
+    assert_eq!(
+        store
+            .human_activity(&[reader.source_id().to_owned()], 0, 6_000_000)
+            .unwrap()
+            .records
+            .len(),
+        5000
+    );
+}
+
+#[test]
+fn generated_payload_columns_are_rejected_before_reading_an_unsupported_schema() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("source.db");
+    Connection::open(&path).unwrap().execute_batch("CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,private_body TEXT,payload TEXT GENERATED ALWAYS AS(private_body) VIRTUAL);").unwrap();
+    assert!(
+        HumanReader::open(&path).is_err(),
+        "only Rei's ordinary stored columns are supported"
     );
 }
 
