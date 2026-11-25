@@ -219,3 +219,112 @@ fn normalized_staging_is_owned_identifiable_and_removed_after_use() {
     drop(stage);
     assert_eq!(std::fs::read_dir(staging).unwrap().count(), 0);
 }
+
+#[test]
+fn clearing_current_source_while_off_preserves_other_sources_ai_and_originals() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache.db");
+    let store = Store::open(&cache).unwrap();
+    store
+        .set_setting(
+            "config",
+            r#"{"human_activity_enabled":true,"keep":"synthetic preference"}"#,
+        )
+        .unwrap();
+    drop(store);
+    let root = tmp.path().join("one");
+    source(&root);
+    let other = tmp.path().join("two");
+    source(&other);
+    let original = std::fs::read(root.join("storage.db")).unwrap();
+    let staging = tmp.path().join("staging");
+    let runtime = HumanRuntime::new(cache.clone(), staging.clone(), |_| {});
+    for location in [&other, &root] {
+        runtime
+            .configure(
+                HumanPreferences {
+                    enabled: true,
+                    root: location.clone(),
+                    auto_refresh: false,
+                },
+                || Ok(()),
+            )
+            .unwrap();
+        synced(&runtime, 1);
+    }
+    runtime
+        .configure(
+            HumanPreferences {
+                enabled: false,
+                root: root.clone(),
+                auto_refresh: false,
+            },
+            || Ok(()),
+        )
+        .unwrap();
+    assert!(runtime.wait_idle(Duration::from_secs(2)));
+    let conn = rusqlite::Connection::open(&cache).unwrap();
+    conn.execute_batch(
+        "INSERT INTO projects VALUES('keep-project','/synthetic','AI keep','#123456',0);",
+    )
+    .unwrap();
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM human_activity_sources", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    let result = runtime
+        .clear(false, |s| {
+            let mut config: serde_json::Value =
+                serde_json::from_str(&s.get_setting("config").unwrap().unwrap()).unwrap();
+            config["human_activity_enabled"] = false.into();
+            Ok(config.to_string())
+        })
+        .unwrap();
+    assert!(result.staging_cleared);
+    assert!(result.compacted);
+    assert_eq!(
+        runtime.period(0, 10000).unwrap_err(),
+        "human_activity_disabled"
+    );
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM human_activity_sources", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM human_activity_records", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT name FROM projects WHERE id='keep-project'",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "AI keep"
+    );
+    let config: serde_json::Value = serde_json::from_str(
+        &Store::open(&cache)
+            .unwrap()
+            .get_setting("config")
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(config["human_activity_enabled"], false);
+    assert_eq!(config["keep"], "synthetic preference");
+    assert_eq!(std::fs::read(root.join("storage.db")).unwrap(), original);
+    runtime.clear(true, |_| Ok(config.to_string())).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM human_activity_sources", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
