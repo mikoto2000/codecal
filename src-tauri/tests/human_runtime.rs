@@ -360,3 +360,168 @@ fn staging_cleanup_never_follows_a_replaced_directory_link() {
     );
     assert!(!result.staging_cleared);
 }
+
+#[test]
+fn a_job_started_before_clear_cannot_resurrect_cache() {
+    use std::sync::{mpsc, Arc, Barrier};
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache.db");
+    let store = Store::open(&cache).unwrap();
+    store
+        .set_setting("config", r#"{"human_activity_enabled":true}"#)
+        .unwrap();
+    drop(store);
+    let root = tmp.path().join("source");
+    source(&root);
+    let barrier = Arc::new(Barrier::new(2));
+    let worker_barrier = barrier.clone();
+    let (sender, receiver) = mpsc::channel();
+    let runtime = HumanRuntime::new(cache.clone(), tmp.path().join("staging"), move |status| {
+        if status.busy {
+            sender.send(()).unwrap();
+            worker_barrier.wait();
+        }
+    });
+    runtime
+        .configure(
+            HumanPreferences {
+                enabled: true,
+                root,
+                auto_refresh: true,
+            },
+            || Ok(()),
+        )
+        .unwrap();
+    receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+    std::thread::scope(|scope| {
+        let clear = scope
+            .spawn(|| runtime.clear(true, |_| Ok(r#"{"human_activity_enabled":false}"#.into())));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let observer = Store::open(&cache).unwrap();
+        while observer
+            .get_setting("config")
+            .unwrap()
+            .unwrap()
+            .contains("true")
+        {
+            if Instant::now() >= deadline {
+                barrier.wait();
+                panic!("clear did not persist OFF");
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        barrier.wait();
+        assert!(clear.join().unwrap().unwrap().staging_cleared);
+    });
+    assert!(runtime.wait_idle(Duration::from_secs(2)));
+    let conn = rusqlite::Connection::open(cache).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM human_activity_records", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(runtime.status().revision, 0);
+    assert_eq!(
+        runtime.period(0, 10000).unwrap_err(),
+        "human_activity_disabled"
+    );
+}
+
+#[test]
+fn clear_failure_rolls_back_config_cache_and_runtime_without_exposing_sqlite_values() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache.db");
+    let store = Store::open(&cache).unwrap();
+    store
+        .set_setting("config", r#"{"human_activity_enabled":true}"#)
+        .unwrap();
+    drop(store);
+    let root = tmp.path().join("source");
+    source(&root);
+    let runtime = HumanRuntime::new(cache.clone(), tmp.path().join("staging"), |_| {});
+    runtime
+        .configure(
+            HumanPreferences {
+                enabled: true,
+                root,
+                auto_refresh: false,
+            },
+            || Ok(()),
+        )
+        .unwrap();
+    synced(&runtime, 1);
+    let conn = rusqlite::Connection::open(&cache).unwrap();
+    conn.execute_batch("CREATE TRIGGER fail_clear BEFORE DELETE ON human_activity_records BEGIN SELECT RAISE(ABORT,'PRIVATE_CACHE_DELETE_MARKER'); END;").unwrap();
+    let error = runtime
+        .clear(true, |_| Ok(r#"{"human_activity_enabled":false}"#.into()))
+        .err()
+        .unwrap();
+    assert_eq!(error, "cache_clear_failed");
+    assert_eq!(runtime.period(0, 10000).unwrap().records.len(), 1);
+    assert!(Store::open(&cache)
+        .unwrap()
+        .get_setting("config")
+        .unwrap()
+        .unwrap()
+        .contains("true"));
+    assert_eq!(runtime.status().revision, 1);
+}
+
+#[test]
+fn orphan_staging_cleanup_respects_selected_source_and_keeps_unrelated_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache.db");
+    drop(Store::open(&cache).unwrap());
+    let staging = tmp.path().join("staging");
+    std::fs::create_dir(&staging).unwrap();
+    let first = tmp.path().join("first");
+    source(&first);
+    let second = tmp.path().join("second");
+    source(&second);
+    let mut files = vec![];
+    for root in [&first, &second] {
+        let reader = codecal_lib::rei_human::HumanReader::open(&root.join("storage.db")).unwrap();
+        let stage = reader.stage_in(&staging, || false).unwrap();
+        let file = std::fs::read_dir(&staging)
+            .unwrap()
+            .map(Result::unwrap)
+            .find(|entry| !files.contains(&entry.path()))
+            .unwrap()
+            .path();
+        let bytes = std::fs::read(&file).unwrap();
+        drop(stage);
+        std::fs::write(&file, bytes).unwrap();
+        files.push(file);
+    }
+    let unrelated = staging.join("unrelated.txt");
+    std::fs::write(&unrelated, b"keep").unwrap();
+    let runtime = HumanRuntime::new(cache, staging, |_| {});
+    runtime
+        .configure(
+            HumanPreferences {
+                enabled: false,
+                root: first,
+                auto_refresh: false,
+            },
+            || Ok(()),
+        )
+        .unwrap();
+    assert!(
+        runtime
+            .clear(false, |_| Ok(r#"{"human_activity_enabled":false}"#.into()))
+            .unwrap()
+            .staging_cleared
+    );
+    assert!(!files[0].exists());
+    assert!(files[1].exists());
+    assert!(unrelated.exists());
+    assert!(
+        runtime
+            .clear(true, |_| Ok(r#"{"human_activity_enabled":false}"#.into()))
+            .unwrap()
+            .staging_cleared
+    );
+    assert!(!files[1].exists());
+    assert!(unrelated.exists());
+}
