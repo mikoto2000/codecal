@@ -194,6 +194,40 @@ fn source_identity_separates_replacements_and_data_version_tracks_wal_commits() 
 }
 
 #[test]
+fn staged_sync_clips_at_next_observation_and_preserves_points_and_gaps() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("source.db");
+    let writer = Connection::open(&path).unwrap();
+    writer.execute_batch("CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT);
+        INSERT INTO activity_records VALUES('a',1000,'{\"durationEstimate\":60,\"detection\":{\"diagnostics\":{\"entertainmentDisposition\":\"ENTERTAINMENT\"}}}');
+        INSERT INTO activity_records VALUES('b',3000,'{\"durationEstimate\":0}');
+        INSERT INTO activity_records VALUES('c',5000,'{\"durationEstimate\":1}');").unwrap();
+    let reader = HumanReader::open(&path).unwrap();
+    let stage = reader.stage(|| false).unwrap();
+    let mut store = Store::open(&tmp.path().join("cache.db")).unwrap();
+    store.apply_human_stage(&stage, || false).unwrap();
+    let response = store
+        .human_activity(&[reader.source_id().to_owned()], 0, 10000)
+        .unwrap();
+    assert_eq!(
+        response
+            .records
+            .iter()
+            .map(|r| (r.start, r.end, r.kind))
+            .collect::<Vec<_>>(),
+        [
+            (1000, 3000, HumanKind::Entertainment),
+            (3000, 3000, HumanKind::Unknown),
+            (5000, 6000, HumanKind::Unknown)
+        ]
+    );
+    assert!(response.diagnostics.is_empty());
+    let wire = serde_json::to_string(&response).unwrap();
+    assert!(!wire.contains("source_id"));
+    assert!(!wire.contains("native_id"));
+}
+
+#[test]
 fn migration_backup_excludes_human_cache_and_keeps_ai_settings() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("codecal.db");
