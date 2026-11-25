@@ -291,6 +291,174 @@ fn a_source_without_a_cache_returns_an_empty_period() {
 }
 
 #[test]
+fn dense_period_fails_explicitly_instead_of_truncating_or_allocating_unbounded_records() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("cache.db");
+    let store = Store::open(&path).unwrap();
+    let writer = Connection::open(&path).unwrap();
+    writer.execute_batch("INSERT INTO human_activity_sources VALUES('s','synthetic','identity',1,0,'synced','[]');
+        WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<50001)
+        INSERT INTO human_activity_records SELECT 's',printf('id-%d',x),x,1,'unknown',printf('hash-%d',x),x+1 FROM n;").unwrap();
+    let response = store.human_activity(&["s".into()], 0, 100000);
+    assert!(
+        response.is_err(),
+        "a dense period must return an explicit error"
+    );
+    assert_eq!(response.unwrap_err().to_string(), "period_too_dense");
+}
+
+#[test]
+fn copied_sources_are_deduplicated_after_their_different_effective_ends_are_resolved() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = tmp.path().join("a.db");
+    let b = tmp.path().join("b.db");
+    let c = tmp.path().join("c.db");
+    let writer = Connection::open(&a).unwrap();
+    writer
+        .execute_batch(
+            "CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT);
+        INSERT INTO activity_records VALUES('same',1000,'{\"durationEstimate\":60}');",
+        )
+        .unwrap();
+    drop(writer);
+    // These are generated fixtures, never a user's original Rei database.
+    std::fs::copy(&a, &b).unwrap();
+    let writer = Connection::open(&a).unwrap();
+    writer
+        .execute_batch(
+            "INSERT INTO activity_records VALUES('next-a',3000,'{\"durationEstimate\":0}');",
+        )
+        .unwrap();
+    drop(writer);
+    let writer = Connection::open(&b).unwrap();
+    writer
+        .execute_batch(
+            "INSERT INTO activity_records VALUES('next-b',5000,'{\"durationEstimate\":0}');",
+        )
+        .unwrap();
+    drop(writer);
+    std::fs::copy(&b, &c).unwrap();
+    let mut store = Store::open(&tmp.path().join("cache.db")).unwrap();
+    let mut sources = vec![];
+    for path in [&a, &b, &c] {
+        let reader = HumanReader::open(path).unwrap();
+        store
+            .apply_human_stage(&reader.stage(|| false).unwrap(), || false)
+            .unwrap();
+        sources.push(reader.source_id().to_owned());
+    }
+    let response = store.human_activity(&sources, 0, 10000).unwrap();
+    assert_eq!(response.records.len(), 4);
+    assert_eq!(
+        response
+            .records
+            .iter()
+            .filter(|r| r.start == 1000)
+            .map(|r| r.end)
+            .collect::<Vec<_>>(),
+        [3000, 5000]
+    );
+    assert_eq!(
+        store
+            .human_activity(&sources[..1], 0, 10000)
+            .unwrap()
+            .records
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn updates_are_idempotent_and_invalid_updates_deletions_and_cancellation_keep_last_good_cache() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("source.db");
+    let cache = tmp.path().join("cache.db");
+    let writer = Connection::open(&path).unwrap();
+    writer.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT);
+        INSERT INTO activity_records VALUES('a',1000,'{\"durationEstimate\":1}');").unwrap();
+    let reader = HumanReader::open(&path).unwrap();
+    let sources = [reader.source_id().to_owned()];
+    let mut store = Store::open(&cache).unwrap();
+    let initial = reader.stage(|| false).unwrap();
+    store.apply_human_stage(&initial, || false).unwrap();
+    store.apply_human_stage(&initial, || false).unwrap();
+    assert_eq!(
+        store
+            .human_activity(&sources, 0, 10000)
+            .unwrap()
+            .records
+            .len(),
+        1
+    );
+    writer
+        .execute_batch(
+            "UPDATE activity_records SET payload='{\"durationEstimate\":2}' WHERE id='a';",
+        )
+        .unwrap();
+    let changed = reader.stage(|| false).unwrap();
+    let calls = std::cell::Cell::new(0);
+    let error = store
+        .apply_human_stage(&changed, || {
+            calls.set(calls.get() + 1);
+            calls.get() > 2
+        })
+        .unwrap_err();
+    assert_eq!(error.to_string(), "sync_cancelled");
+    assert_eq!(
+        store.human_activity(&sources, 0, 10000).unwrap().records[0].end,
+        2000
+    );
+    store.apply_human_stage(&changed, || false).unwrap();
+    assert_eq!(
+        store.human_activity(&sources, 0, 10000).unwrap().records[0].end,
+        3000
+    );
+    assert_eq!(
+        reader.stage(|| true).err().unwrap().to_string(),
+        "sync_cancelled"
+    );
+    writer
+        .execute_batch("UPDATE activity_records SET payload='SECRET_INVALID_UPDATE';")
+        .unwrap();
+    store
+        .apply_human_stage(&reader.stage(|| false).unwrap(), || false)
+        .unwrap();
+    assert_eq!(
+        store.human_activity(&sources, 0, 10000).unwrap().records[0].end,
+        3000
+    );
+    writer
+        .execute_batch("DELETE FROM activity_records;")
+        .unwrap();
+    store
+        .apply_human_stage(&reader.stage(|| false).unwrap(), || false)
+        .unwrap();
+    assert_eq!(
+        store.human_activity(&sources, 0, 10000).unwrap().records[0].end,
+        3000
+    );
+}
+
+#[test]
+fn source_errors_are_fixed_codes_and_ai_only_sources_are_unsupported() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("ai-only.db");
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE agent_events(id TEXT);")
+        .unwrap();
+    assert_eq!(
+        HumanReader::open(&path).err().unwrap().to_string(),
+        "unsupported_source"
+    );
+    let malformed = tmp.path().join("SECRET_SOURCE_NAME.db");
+    std::fs::write(&malformed, b"SECRET_NOT_A_DATABASE").unwrap();
+    let error = HumanReader::open(&malformed).err().unwrap().to_string();
+    assert!(!error.contains("SECRET"));
+    assert!(!error.contains(tmp.path().to_str().unwrap()));
+}
+
+#[test]
 fn migration_backup_excludes_human_cache_and_keeps_ai_settings() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("codecal.db");

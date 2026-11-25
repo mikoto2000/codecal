@@ -72,6 +72,9 @@ impl fmt::Display for HumanError {
     }
 }
 impl std::error::Error for HumanError {}
+fn cache_read_error(_: rusqlite::Error) -> HumanError {
+    HumanError("cache_read_failed")
+}
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -448,7 +451,7 @@ impl crate::store::Store {
         {
             return Err(HumanError("invalid_period"));
         }
-        let read = || -> rusqlite::Result<HumanActivityResponse> {
+        let read = || -> Result<HumanActivityResponse, HumanError> {
             let mut records = vec![];
             let mut seen = HashSet::new();
             let mut counts = BTreeMap::new();
@@ -460,23 +463,30 @@ impl crate::store::Store {
                         [source],
                         |r| r.get(0),
                     )
-                    .optional()?;
+                    .optional()
+                    .map_err(cache_read_error)?;
                 let Some(raw) = raw else {
                     continue;
                 };
-                let ds: Vec<HumanDiagnostic> = serde_json::from_str(&raw).unwrap_or_default();
+                let ds: Vec<HumanDiagnostic> =
+                    serde_json::from_str(&raw).map_err(|_| HumanError("cache_read_failed"))?;
                 for d in ds {
                     *counts.entry(d.code).or_insert(0) += d.count;
                 }
-                let mut query = self.conn.prepare("SELECT native_id,content_hash,captured_at,effective_end,kind FROM human_activity_records WHERE source_id=? AND captured_at<? AND (effective_end>? OR (effective_end=captured_at AND captured_at>=?)) ORDER BY captured_at,native_id")?;
-                let mut rows = query.query(params![source, to, from, from])?;
-                while let Some(row) = rows.next()? {
-                    let id: String = row.get(0)?;
-                    let hash: String = row.get(1)?;
-                    let start: i64 = row.get(2)?;
-                    let end: i64 = row.get(3)?;
-                    let label: String = row.get(4)?;
+                let mut query = self.conn.prepare("SELECT native_id,content_hash,captured_at,effective_end,kind FROM human_activity_records WHERE source_id=? AND captured_at<? AND (effective_end>? OR (effective_end=captured_at AND captured_at>=?)) ORDER BY captured_at,native_id").map_err(cache_read_error)?;
+                let mut rows = query
+                    .query(params![source, to, from, from])
+                    .map_err(cache_read_error)?;
+                while let Some(row) = rows.next().map_err(cache_read_error)? {
+                    let id: String = row.get(0).map_err(cache_read_error)?;
+                    let hash: String = row.get(1).map_err(cache_read_error)?;
+                    let start: i64 = row.get(2).map_err(cache_read_error)?;
+                    let end: i64 = row.get(3).map_err(cache_read_error)?;
+                    let label: String = row.get(4).map_err(cache_read_error)?;
                     if seen.insert((id, hash, start, end, label.clone())) {
+                        if records.len() == 50_000 {
+                            return Err(HumanError("period_too_dense"));
+                        }
                         records.push(HumanActivity {
                             start,
                             end,
@@ -491,6 +501,6 @@ impl crate::store::Store {
                 diagnostics: diagnostics(counts),
             })
         };
-        read().map_err(|_| HumanError("cache_read_failed"))
+        read()
     }
 }
