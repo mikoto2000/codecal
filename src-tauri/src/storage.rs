@@ -51,6 +51,7 @@ pub fn prepare_database(local: &Path, previous: &Path) -> Result<PathBuf, String
     source_conn
         .backup(MAIN_DB, temporary.path(), None)
         .map_err(|e| format!("DBの移行に失敗しました: {e}"))?;
+    exclude_human_cache(temporary.path())?;
     // No-clobber publication also protects an independently created local DB.
     match temporary.persist_noclobber(&target) {
         Ok(_) => {}
