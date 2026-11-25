@@ -17,6 +17,7 @@ use std::{
 
 #[derive(Clone, Default, Serialize)]
 pub struct HumanSyncStatus {
+    pub generation: u64,
     pub busy: bool,
     pub revision: u64,
     pub error: Option<String>,
@@ -130,7 +131,10 @@ impl HumanRuntime {
         let shared = Arc::new(Shared {
             control: Mutex::new(Control {
                 preferences: HumanPreferences::default(),
-                status: HumanSyncStatus::default(),
+                status: HumanSyncStatus {
+                    generation: 1,
+                    ..HumanSyncStatus::default()
+                },
                 pending: false,
                 force: false,
                 requested: Instant::now(),
@@ -167,8 +171,11 @@ impl HumanRuntime {
         let changed = control.preferences.enabled != preferences.enabled
             || control.preferences.root != preferences.root;
         if changed {
-            self.shared.epoch.fetch_add(1, Ordering::SeqCst);
-            control.status = HumanSyncStatus::default();
+            let generation = self.shared.epoch.fetch_add(1, Ordering::SeqCst) + 1;
+            control.status = HumanSyncStatus {
+                generation,
+                ..HumanSyncStatus::default()
+            };
             control.pending = preferences.enabled;
             control.force = preferences.enabled;
             control.requested = Instant::now();
@@ -249,11 +256,14 @@ impl HumanRuntime {
         tx.commit().map_err(|_| "cache_clear_failed")?;
         {
             let mut control = lock(&self.shared.control);
-            self.shared.epoch.fetch_add(1, Ordering::SeqCst);
+            let generation = self.shared.epoch.fetch_add(1, Ordering::SeqCst) + 1;
             control.preferences.enabled = false;
             control.pending = false;
             control.force = false;
-            control.status = HumanSyncStatus::default();
+            control.status = HumanSyncStatus {
+                generation,
+                ..HumanSyncStatus::default()
+            };
             self.shared.wake.notify_all();
         }
         // A stale job can be waiting for this gate; release it before waiting.

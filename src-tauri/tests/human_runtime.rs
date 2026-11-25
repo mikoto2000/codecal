@@ -33,6 +33,7 @@ fn disabled_runtime_never_opens_missing_source_and_refuses_periods() {
         "human_activity_disabled"
     );
     assert!(!runtime.status().busy);
+    assert!(runtime.status().generation > 0);
     assert!(!staging.exists());
 }
 
