@@ -66,7 +66,7 @@ fn source_projects_only_normalized_classification_and_estimated_time() {
             .unwrap();
     }
     let reader = HumanReader::open(&path).unwrap();
-    let page = reader.read_page(0).unwrap();
+    let page = reader.read_page(None).unwrap();
     assert_eq!(
         page.records.iter().map(|r| r.kind).collect::<Vec<_>>(),
         [
@@ -98,7 +98,7 @@ fn invalid_json_is_counted_without_blocking_valid_observations() {
             ["SECRET_HUGE".to_owned() + &"x".repeat(1024 * 1024)],
         )
         .unwrap();
-    let page = HumanReader::open(&path).unwrap().read_page(0).unwrap();
+    let page = HumanReader::open(&path).unwrap().read_page(None).unwrap();
     assert_eq!(page.records.len(), 1);
     assert_eq!(page.records[0].native_id, "good");
     assert_eq!(page.diagnostics[0].code, DiagnosticCode::InvalidJson);
@@ -136,7 +136,7 @@ fn invalid_time_estimates_are_skipped_and_zero_and_long_estimates_survive() {
         INSERT INTO activity_records VALUES('bad-date',9223372036854775807,'{\"durationEstimate\":1}');
         INSERT INTO activity_records VALUES('bad-type','SECRET_DATE','{\"durationEstimate\":1}');
         INSERT INTO activity_records VALUES('long',1000,'{\"durationEstimate\":172800}');").unwrap();
-    let page = HumanReader::open(&path).unwrap().read_page(0).unwrap();
+    let page = HumanReader::open(&path).unwrap().read_page(None).unwrap();
     assert_eq!(
         page.records
             .iter()
@@ -177,7 +177,7 @@ fn source_identity_separates_replacements_and_data_version_tracks_wal_commits() 
         )
         .unwrap();
     assert_ne!(reader.data_version().unwrap(), version);
-    assert_eq!(reader.read_page(0).unwrap().records.len(), 1);
+    assert_eq!(reader.read_page(None).unwrap().records.len(), 1);
     reader.verify_identity().unwrap();
     drop(reader);
     drop(writer);
@@ -255,6 +255,39 @@ fn simultaneous_observations_choose_last_id_and_report_classification_conflicts(
             .map(|d| d.count),
         Some(1)
     );
+}
+
+#[test]
+fn paging_includes_zero_negative_and_maximum_sqlite_rowids() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("source.db");
+    let writer = Connection::open(&path).unwrap();
+    writer.execute_batch("CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT);
+        INSERT INTO activity_records(rowid,id,captured_at,payload) VALUES(-9223372036854775808,'min',1000,'{\"durationEstimate\":1}'),(0,'zero',2000,'{\"durationEstimate\":1}'),(9223372036854775807,'max',3000,'{\"durationEstimate\":1}');").unwrap();
+    let reader = HumanReader::open(&path).unwrap();
+    assert_eq!(reader.read_page(None).unwrap().records.len(), 3);
+    let stage = reader.stage(|| false).unwrap();
+    let mut store = Store::open(&tmp.path().join("cache.db")).unwrap();
+    store.apply_human_stage(&stage, || false).unwrap();
+    assert_eq!(
+        store
+            .human_activity(&[reader.source_id().to_owned()], 0, 10000)
+            .unwrap()
+            .records
+            .len(),
+        3
+    );
+}
+
+#[test]
+fn a_source_without_a_cache_returns_an_empty_period() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::open(&tmp.path().join("cache.db")).unwrap();
+    let response = store
+        .human_activity(&["not-yet-synced".into()], 0, 1000)
+        .unwrap();
+    assert!(response.records.is_empty());
+    assert!(response.diagnostics.is_empty());
 }
 
 #[test]

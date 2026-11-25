@@ -1,5 +1,5 @@
 //! Minimized Rei observation reader. Original payloads never cross SQLite's boundary.
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashSet},
@@ -136,7 +136,7 @@ pub struct Observation {
     pub kind: HumanKind,
 }
 pub struct ObservationPage {
-    pub cursor: i64,
+    pub cursor: Option<i64>,
     pub records: Vec<Observation>,
     pub diagnostics: Vec<HumanDiagnostic>,
 }
@@ -214,7 +214,7 @@ impl HumanReader {
             .unchecked_transaction()
             .map_err(|_| HumanError("source_read_failed"))?;
         let mut counts = BTreeMap::new();
-        let mut cursor = 0;
+        let mut cursor = None;
         loop {
             check()?;
             let page = self.read_page(cursor)?;
@@ -272,8 +272,19 @@ impl HumanReader {
             diagnostics: diagnostics(counts),
         })
     }
-    pub fn read_page(&self, after: i64) -> Result<ObservationPage, HumanError> {
+    pub fn read_page(&self, after: Option<i64>) -> Result<ObservationPage, HumanError> {
         self.verify_identity()?;
+        let lower = match after {
+            Some(i64::MAX) => {
+                return Ok(ObservationPage {
+                    cursor: after,
+                    records: vec![],
+                    diagnostics: vec![],
+                })
+            }
+            Some(value) => value + 1,
+            None => i64::MIN,
+        };
         let read = || -> rusqlite::Result<ObservationPage> {
             let mut stmt = self.conn.prepare("SELECT rowid,
                 CASE WHEN typeof(id)='text' AND octet_length(id) BETWEEN 1 AND 256 THEN id END,
@@ -288,8 +299,8 @@ impl HumanReader {
                 WHEN NOT json_valid(payload) THEN 'invalid_json'
                 WHEN json_type(payload,'$.durationEstimate') IS NOT 'integer' THEN 'invalid_duration_type'
                 WHEN typeof(json_extract(payload,'$.durationEstimate'))<>'integer' THEN 'invalid_duration_type'
-                ELSE 'ok' END AS status FROM activity_records WHERE rowid>? ORDER BY rowid LIMIT 256)")?;
-            let mut rows = stmt.query([after])?;
+                ELSE 'ok' END AS status FROM activity_records WHERE rowid>=? ORDER BY rowid LIMIT 256)")?;
+            let mut rows = stmt.query([lower])?;
             let mut page = ObservationPage {
                 cursor: after,
                 records: vec![],
@@ -297,7 +308,7 @@ impl HumanReader {
             };
             let mut counts = BTreeMap::new();
             while let Some(row) = rows.next()? {
-                page.cursor = row.get(0)?;
+                page.cursor = Some(row.get(0)?);
                 let status: String = row.get(5)?;
                 let code = match status.as_str() {
                     "ok" => None,
@@ -442,11 +453,17 @@ impl crate::store::Store {
             let mut seen = HashSet::new();
             let mut counts = BTreeMap::new();
             for source in sources {
-                let raw: String = self.conn.query_row(
-                    "SELECT diagnostics FROM human_activity_sources WHERE source_id=?",
-                    [source],
-                    |r| r.get(0),
-                )?;
+                let raw: Option<String> = self
+                    .conn
+                    .query_row(
+                        "SELECT diagnostics FROM human_activity_sources WHERE source_id=?",
+                        [source],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                let Some(raw) = raw else {
+                    continue;
+                };
                 let ds: Vec<HumanDiagnostic> = serde_json::from_str(&raw).unwrap_or_default();
                 for d in ds {
                     *counts.entry(d.code).or_insert(0) += d.count;
