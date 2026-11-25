@@ -228,6 +228,36 @@ fn staged_sync_clips_at_next_observation_and_preserves_points_and_gaps() {
 }
 
 #[test]
+fn simultaneous_observations_choose_last_id_and_report_classification_conflicts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("source.db");
+    let writer = Connection::open(&path).unwrap();
+    writer.execute_batch("CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT);
+        INSERT INTO activity_records VALUES('a',1000,'{\"durationEstimate\":60,\"detection\":{\"diagnostics\":{\"entertainmentDisposition\":\"ENTERTAINMENT\"}}}');
+        INSERT INTO activity_records VALUES('z',1000,'{\"durationEstimate\":5,\"detection\":{\"diagnostics\":{\"entertainmentDisposition\":\"NON_ENTERTAINMENT\"}}}');
+        INSERT INTO activity_records VALUES('next',3000,'{\"durationEstimate\":0}');").unwrap();
+    let reader = HumanReader::open(&path).unwrap();
+    let mut store = Store::open(&tmp.path().join("cache.db")).unwrap();
+    store
+        .apply_human_stage(&reader.stage(|| false).unwrap(), || false)
+        .unwrap();
+    let response = store
+        .human_activity(&[reader.source_id().to_owned()], 0, 10000)
+        .unwrap();
+    assert_eq!(response.records.len(), 2);
+    assert_eq!(response.records[0].kind, HumanKind::NonEntertainment);
+    assert_eq!(response.records[0].end, 3000);
+    assert_eq!(
+        response
+            .diagnostics
+            .iter()
+            .find(|d| d.code == DiagnosticCode::SimultaneousConflict)
+            .map(|d| d.count),
+        Some(1)
+    );
+}
+
+#[test]
 fn migration_backup_excludes_human_cache_and_keeps_ai_settings() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("codecal.db");

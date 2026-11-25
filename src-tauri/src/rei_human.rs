@@ -399,6 +399,24 @@ impl crate::store::Store {
             tx.execute("UPDATE human_activity_records SET effective_end=(SELECT effective_end FROM human_resolved r WHERE r.native_id=human_activity_records.native_id) WHERE source_id=? AND effective_end IS NOT (SELECT effective_end FROM human_resolved r WHERE r.native_id=human_activity_records.native_id)", [&stage.source_id]).map_err(|_| HumanError("cache_write_failed"))?;
             tx.execute_batch("DROP TABLE human_resolved;")
                 .map_err(|_| HumanError("cache_write_failed"))?;
+            let conflicts: i64 = tx.query_row("SELECT count(*) FROM (SELECT captured_at FROM human_activity_records WHERE source_id=? GROUP BY captured_at HAVING count(DISTINCT kind)>1)", [&stage.source_id], |r| r.get(0)).map_err(|_| HumanError("cache_write_failed"))?;
+            if conflicts > 0 {
+                let mut counts = stage
+                    .diagnostics
+                    .iter()
+                    .map(|d| (d.code, d.count))
+                    .collect::<BTreeMap<_, _>>();
+                counts.insert(DiagnosticCode::SimultaneousConflict, conflicts as u64);
+                tx.execute(
+                    "UPDATE human_activity_sources SET diagnostics=? WHERE source_id=?",
+                    params![
+                        serde_json::to_string(&diagnostics(counts))
+                            .map_err(|_| HumanError("cache_write_failed"))?,
+                        stage.source_id
+                    ],
+                )
+                .map_err(|_| HumanError("cache_write_failed"))?;
+            }
             if cancelled() {
                 return Err(HumanError("sync_cancelled"));
             }
