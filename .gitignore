@@ -12,3 +12,4 @@ playwright-report/
 src-tauri/gen/
 
 .release/
+__pycache__/
