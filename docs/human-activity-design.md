@@ -75,6 +75,11 @@ v4へ additive migration。`human_activity_sources`: source_id、正規化パス
 同一パスでも置換された DB を過去の incarnation に混ぜない。通常表示は現在パスの現在 incarnation のみ。
 別パスへ移動/コピーしたソースは別管理。同一元ファイルの継続更新と、識別まで保存した特殊な外部復元は区別できない制約が残る。
 
+Windows の bundled SQLite 標準 VFS は DB を `FILE_SHARE_READ | FILE_SHARE_WRITE` で開き、`FILE_SHARE_DELETE` を指定しない。
+したがって接続中の物理ファイル置換は OS に拒否され得る。独自 VFS や原本コピーによって回避せず、機能 OFF で接続を閉じ、置換後の再 ON で新しい物理 ID を検出する。
+この手順の置換・キャッシュ分離をネイティブテストする。Unix では接続中に置換できるため、読取の前後でも物理 ID を照合する。
+Windows の識別には lock 内に既存の `windows-sys 0.61.2` のファイル ID API を直接利用し、新規クレートは追加しない。
+
 ## 同期・キャンセル
 
 専用 worker と継続 read connection。同一接続の data_version、DB/WAL 通知、物理識別、30秒補完を併用。

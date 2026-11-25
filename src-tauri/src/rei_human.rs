@@ -1,10 +1,51 @@
 //! Minimized Rei observation reader. Original payloads never cross SQLite's boundary.
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fmt, path::Path, time::Duration};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    fs::File,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 const MIN_TIME: i64 = -62_135_596_800_000;
 const MAX_TIME: i64 = 253_402_300_799_999;
+
+#[cfg(windows)]
+fn identity(file: &File) -> Result<String, HumanError> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileIdInfo, GetFileInformationByHandleEx, FILE_ID_INFO,
+    };
+    let mut info = std::mem::MaybeUninit::<FILE_ID_INFO>::zeroed();
+    // The buffer has the API's exact layout/size and remains valid for the call.
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileIdInfo,
+            info.as_mut_ptr().cast(),
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        )
+    };
+    if ok == 0 {
+        return Err(HumanError("source_unavailable"));
+    }
+    // A successful call initializes the complete FILE_ID_INFO structure.
+    let info = unsafe { info.assume_init() };
+    Ok(format!(
+        "{}:{:02x?}",
+        info.VolumeSerialNumber, info.FileId.Identifier
+    ))
+}
+#[cfg(unix)]
+fn identity(file: &File) -> Result<String, HumanError> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = file
+        .metadata()
+        .map_err(|_| HumanError("source_unavailable"))?;
+    Ok(format!("{}:{}", metadata.dev(), metadata.ino()))
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -71,18 +112,58 @@ pub struct ObservationPage {
 }
 pub struct HumanReader {
     conn: Connection,
+    path: PathBuf,
+    file_identity: String,
+    source_id: String,
+    _file: File,
 }
 impl HumanReader {
     pub fn open(path: &Path) -> Result<Self, HumanError> {
-        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        let path = path
+            .canonicalize()
+            .map_err(|_| HumanError("source_unavailable"))?;
+        let file = File::open(&path).map_err(|_| HumanError("source_unavailable"))?;
+        let file_identity = identity(&file)?;
+        let source_path = path.to_string_lossy().to_string();
+        #[cfg(windows)]
+        let source_path = source_path.to_lowercase();
+        let source_id = crate::store::hash(format!("{source_path}\0{file_identity}"));
+        let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(|_| HumanError("source_unavailable"))?;
         conn.busy_timeout(Duration::from_millis(500))
             .map_err(|_| HumanError("source_unavailable"))?;
         conn.pragma_update(None, "query_only", true)
             .map_err(|_| HumanError("source_unavailable"))?;
-        Ok(Self { conn })
+        conn.prepare("SELECT rowid,id,captured_at,payload FROM activity_records LIMIT 0")
+            .map_err(|_| HumanError("unsupported_source"))?;
+        let reader = Self {
+            conn,
+            path,
+            file_identity,
+            source_id,
+            _file: file,
+        };
+        reader.verify_identity()?;
+        Ok(reader)
+    }
+    pub fn source_id(&self) -> &str {
+        &self.source_id
+    }
+    pub fn data_version(&self) -> Result<i64, HumanError> {
+        self.verify_identity()?;
+        self.conn
+            .pragma_query_value(None, "data_version", |r| r.get(0))
+            .map_err(|_| HumanError("source_read_failed"))
+    }
+    pub fn verify_identity(&self) -> Result<(), HumanError> {
+        let file = File::open(&self.path).map_err(|_| HumanError("source_unavailable"))?;
+        if identity(&file)? != self.file_identity {
+            return Err(HumanError("source_replaced"));
+        }
+        Ok(())
     }
     pub fn read_page(&self, after: i64) -> Result<ObservationPage, HumanError> {
+        self.verify_identity()?;
         let read = || -> rusqlite::Result<ObservationPage> {
             let mut stmt = self.conn.prepare("SELECT rowid,
                 CASE WHEN typeof(id)='text' AND octet_length(id) BETWEEN 1 AND 256 THEN id END,
@@ -156,6 +237,8 @@ impl HumanReader {
             page.diagnostics = diagnostics(counts);
             Ok(page)
         };
-        read().map_err(|_| HumanError("source_read_failed"))
+        let result = read().map_err(|_| HumanError("source_read_failed"))?;
+        self.verify_identity()?;
+        Ok(result)
     }
 }

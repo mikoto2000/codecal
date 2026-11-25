@@ -163,6 +163,37 @@ fn invalid_time_estimates_are_skipped_and_zero_and_long_estimates_survive() {
 }
 
 #[test]
+fn source_identity_separates_replacements_and_data_version_tracks_wal_commits() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("source.db");
+    let writer = Connection::open(&path).unwrap();
+    writer.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT);").unwrap();
+    let reader = HumanReader::open(&path).unwrap();
+    let first_id = reader.source_id().to_owned();
+    let version = reader.data_version().unwrap();
+    writer
+        .execute_batch(
+            "INSERT INTO activity_records VALUES('observed',1000,'{\"durationEstimate\":1}');",
+        )
+        .unwrap();
+    assert_ne!(reader.data_version().unwrap(), version);
+    assert_eq!(reader.read_page(0).unwrap().records.len(), 1);
+    reader.verify_identity().unwrap();
+    drop(reader);
+    drop(writer);
+    // Windows SQLite's standard VFS keeps an open DB from being renamed.
+    // Close it as feature OFF does; replacement must be detected on reopening.
+    std::fs::rename(&path, tmp.path().join("old.db")).unwrap();
+    let replacement = Connection::open(&path).unwrap();
+    replacement
+        .execute_batch(
+            "CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT);",
+        )
+        .unwrap();
+    assert_ne!(HumanReader::open(&path).unwrap().source_id(), first_id);
+}
+
+#[test]
 fn migration_backup_excludes_human_cache_and_keeps_ai_settings() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("codecal.db");
