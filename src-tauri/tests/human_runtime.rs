@@ -363,6 +363,35 @@ fn staging_cleanup_never_follows_a_replaced_directory_link() {
 }
 
 #[test]
+fn a_dangling_staging_link_is_not_reported_as_successfully_cleaned() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache.db");
+    drop(Store::open(&cache).unwrap());
+    let target = tmp.path().join("removed-target");
+    std::fs::create_dir(&target).unwrap();
+    let staging = tmp.path().join("staging");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&target, &staging).unwrap();
+    #[cfg(windows)]
+    assert!(std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&staging)
+        .arg(&target)
+        .output()
+        .unwrap()
+        .status
+        .success());
+    std::fs::remove_dir(&target).unwrap();
+    let runtime = HumanRuntime::new(cache, staging, |_| {});
+    assert!(
+        !runtime
+            .clear(true, |_| Ok(r#"{"human_activity_enabled":false}"#.into()))
+            .unwrap()
+            .staging_cleared
+    );
+}
+
+#[test]
 fn a_job_started_before_clear_cannot_resurrect_cache() {
     use std::sync::{mpsc, Arc, Barrier};
     let tmp = tempfile::tempdir().unwrap();
@@ -577,5 +606,56 @@ fn wal_changes_ai_only_changes_manual_sync_and_coalesced_notifications_are_obser
     assert_eq!(runtime.period(0, 10000).unwrap().records[0].end, 4000);
     runtime.request(true);
     synced(&runtime, 4);
+    assert_eq!(runtime.period(0, 10000).unwrap().records.len(), 1);
+}
+
+#[test]
+fn unavailable_source_keeps_cache_and_periodic_check_retries_without_notifications() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache.db");
+    drop(Store::open(&cache).unwrap());
+    let root = tmp.path().join("source");
+    source(&root);
+    let runtime = HumanRuntime::new(cache, tmp.path().join("staging"), |_| {});
+    let preferences = HumanPreferences {
+        enabled: true,
+        root: root.clone(),
+        auto_refresh: true,
+    };
+    runtime.configure(preferences.clone(), || Ok(())).unwrap();
+    synced(&runtime, 1);
+    runtime
+        .configure(
+            HumanPreferences {
+                enabled: false,
+                ..preferences.clone()
+            },
+            || Ok(()),
+        )
+        .unwrap();
+    assert!(runtime.wait_idle(Duration::from_secs(2)));
+    std::fs::rename(
+        root.join("storage.db"),
+        root.join("temporarily-unavailable.db"),
+    )
+    .unwrap();
+    runtime.configure(preferences, || Ok(())).unwrap();
+    assert!(runtime.wait_idle(Duration::from_secs(2)));
+    assert_eq!(
+        runtime.status().error.as_deref(),
+        Some("source_unavailable")
+    );
+    assert_eq!(runtime.period(0, 10000).unwrap().records.len(), 1);
+    std::fs::rename(
+        root.join("temporarily-unavailable.db"),
+        root.join("storage.db"),
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(35);
+    while runtime.status().revision < 1 {
+        assert!(Instant::now() < deadline, "periodic retry did not finish");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(runtime.status().error.is_none());
     assert_eq!(runtime.period(0, 10000).unwrap().records.len(), 1);
 }

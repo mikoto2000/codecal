@@ -30,8 +30,10 @@ pub struct HumanClearResult {
 }
 
 fn purge_staging(directory: &Path, prefix: Option<&str>) -> bool {
-    if !directory.exists() {
-        return true;
+    match std::fs::symlink_metadata(directory) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return true,
+        Err(_) => return false,
+        Ok(_) => {}
     }
     if crate::rei_human::validate_staging_directory(directory).is_err() {
         return false;

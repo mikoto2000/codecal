@@ -43,7 +43,10 @@ pub(crate) fn validate_staging_directory(path: &Path) -> Result<(), HumanError> 
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        if metadata.file_attributes() & 0x400 != 0 {
+        if metadata.file_attributes()
+            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+            != 0
+        {
             return Err(HumanError("staging_failed"));
         }
     }

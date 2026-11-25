@@ -843,6 +843,14 @@ test("database startup migrates v2 with backup and reopens compatible legacy v3"
         user_version: 2,
       });
       expect(
+        backup.prepare("SELECT count(*) AS n FROM human_activity_records").get()
+          ?.n,
+      ).toBe(0);
+      expect(
+        backup.prepare("SELECT count(*) AS n FROM human_activity_sources").get()
+          ?.n,
+      ).toBe(0);
+      expect(
         backup
           .prepare("SELECT value FROM settings WHERE key='migration-test'")
           .get(),
