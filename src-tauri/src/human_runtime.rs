@@ -29,6 +29,12 @@ pub struct HumanClearResult {
 }
 
 fn purge_staging(directory: &Path, prefix: Option<&str>) -> bool {
+    if !directory.exists() {
+        return true;
+    }
+    if crate::rei_human::validate_staging_directory(directory).is_err() {
+        return false;
+    }
     let entries = match std::fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return true,

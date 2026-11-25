@@ -328,3 +328,35 @@ fn clearing_current_source_while_off_preserves_other_sources_ai_and_originals() 
         0
     );
 }
+
+#[test]
+fn staging_cleanup_never_follows_a_replaced_directory_link() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache.db");
+    drop(Store::open(&cache).unwrap());
+    let outside = tmp.path().join("other-owner");
+    std::fs::create_dir(&outside).unwrap();
+    let file = outside.join(format!("human-{}-synthetic.db", "0".repeat(64)));
+    std::fs::write(&file, b"synthetic other owner's file").unwrap();
+    let staging = tmp.path().join("staging");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&outside, &staging).unwrap();
+    #[cfg(windows)]
+    assert!(std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&staging)
+        .arg(&outside)
+        .output()
+        .unwrap()
+        .status
+        .success());
+    let runtime = HumanRuntime::new(cache, staging, |_| {});
+    let result = runtime
+        .clear(true, |_| Ok(r#"{"human_activity_enabled":false}"#.into()))
+        .unwrap();
+    assert!(
+        file.exists(),
+        "cleanup crossed the owned directory boundary"
+    );
+    assert!(!result.staging_cleared);
+}

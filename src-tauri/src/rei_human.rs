@@ -38,6 +38,21 @@ pub(crate) fn staging_prefix(path: &Path) -> Result<String, HumanError> {
     ))
 }
 
+pub(crate) fn validate_staging_directory(path: &Path) -> Result<(), HumanError> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|_| HumanError("staging_failed"))?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err(HumanError("staging_failed"));
+        }
+    }
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(HumanError("staging_failed"));
+    }
+    Ok(())
+}
+
 fn validate_source_schema(conn: &Connection) -> Result<(), HumanError> {
     let ordinary: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_list WHERE schema='main' AND name='activity_records' AND type='table' AND wr=0)",[],|r|r.get(0)).map_err(|_|HumanError("unsupported_source"))?;
     let columns: i64 = conn.query_row("SELECT count(*) FROM pragma_table_xinfo('activity_records') WHERE hidden=0 AND ((name='id' AND upper(type)='TEXT' AND pk=1) OR (name='captured_at' AND upper(type)='INTEGER') OR (name='payload' AND upper(type)='TEXT'))",[],|r|r.get(0)).map_err(|_|HumanError("unsupported_source"))?;
@@ -405,6 +420,9 @@ impl HumanReader {
         directory: Option<&Path>,
         cancelled: impl Fn() -> bool,
     ) -> Result<HumanStage, HumanError> {
+        if let Some(directory) = directory {
+            validate_staging_directory(directory)?;
+        }
         let began = Instant::now();
         let check = || {
             if cancelled() || began.elapsed() > Duration::from_secs(30) {
