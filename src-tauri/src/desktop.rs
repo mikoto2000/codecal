@@ -15,6 +15,8 @@ pub struct Config {
     pub claude_root: String,
     #[serde(default = "default_rei_enabled")]
     pub rei_enabled: bool,
+    #[serde(default)]
+    pub human_activity_enabled: bool,
     #[serde(default = "default_rei_root")]
     pub rei_root: String,
     pub timezone: String,
@@ -96,6 +98,7 @@ mod tests {
         assert_eq!(c.claude_enabled, default_claude_enabled());
         assert_eq!(c.rei_root, default_rei_root());
         assert_eq!(c.rei_enabled, default_rei_enabled());
+        assert!(!c.human_activity_enabled);
         assert_eq!(c.timezone, "Asia/Tokyo");
         assert_eq!(c.theme, "dark");
         assert!(!c.auto_refresh);
@@ -147,6 +150,7 @@ impl Default for Config {
             claude_enabled: default_claude_enabled(),
             claude_root: default_claude_root(),
             rei_enabled: default_rei_enabled(),
+            human_activity_enabled: false,
             rei_root: default_rei_root(),
             log_root: std::env::var("CODEX_HOME").unwrap_or_else(|_| {
                 let home = std::env::var("USERPROFILE")
@@ -302,7 +306,7 @@ fn validate_config(value: &Config) -> Result<(), String> {
         return Err("ヒートマップのしきい値は正の数を昇順で指定してください".into());
     }
     if value.log_root.trim().is_empty()
-        || (value.rei_enabled && value.rei_root.trim().is_empty())
+        || ((value.rei_enabled || value.human_activity_enabled) && value.rei_root.trim().is_empty())
         || (value.claude_enabled && value.claude_root.trim().is_empty())
     {
         return Err("ログディレクトリを指定してください".into());
