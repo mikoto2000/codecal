@@ -194,3 +194,28 @@ fn selected_cache_is_available_before_reopening_or_rescanning_source() {
     barrier.wait();
     assert_eq!(response.unwrap().records.len(), 1);
 }
+
+#[test]
+fn normalized_staging_is_owned_identifiable_and_removed_after_use() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("source");
+    source(&root);
+    let staging = tmp.path().join("owned-staging");
+    std::fs::create_dir(&staging).unwrap();
+    let reader = codecal_lib::rei_human::HumanReader::open(&root.join("storage.db")).unwrap();
+    let stage = reader.stage_in(&staging, || false).unwrap();
+    let files = std::fs::read_dir(&staging)
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(files.len(), 1);
+    let file = &files[0];
+    assert!(file.file_name().to_str().unwrap().starts_with("human-"));
+    assert!(file.file_name().to_str().unwrap().ends_with(".db"));
+    let bytes = std::fs::read(file.path()).unwrap();
+    assert!(!bytes
+        .windows(b"PRIVATE_RUNTIME_MARKER".len())
+        .any(|w| w == b"PRIVATE_RUNTIME_MARKER"));
+    drop(stage);
+    assert_eq!(std::fs::read_dir(staging).unwrap().count(), 0);
+}

@@ -31,6 +31,13 @@ pub fn source_identity(path: &Path) -> Result<String, HumanError> {
     )))
 }
 
+pub(crate) fn staging_prefix(path: &Path) -> Result<String, HumanError> {
+    Ok(format!(
+        "human-{}-",
+        crate::store::hash(logical_source_path(path)?)
+    ))
+}
+
 fn validate_source_schema(conn: &Connection) -> Result<(), HumanError> {
     let ordinary: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_list WHERE schema='main' AND name='activity_records' AND type='table' AND wr=0)",[],|r|r.get(0)).map_err(|_|HumanError("unsupported_source"))?;
     let columns: i64 = conn.query_row("SELECT count(*) FROM pragma_table_xinfo('activity_records') WHERE hidden=0 AND ((name='id' AND upper(type)='TEXT' AND pk=1) OR (name='captured_at' AND upper(type)='INTEGER') OR (name='payload' AND upper(type)='TEXT'))",[],|r|r.get(0)).map_err(|_|HumanError("unsupported_source"))?;
@@ -384,6 +391,20 @@ impl HumanReader {
         Ok(())
     }
     pub fn stage(&self, cancelled: impl Fn() -> bool) -> Result<HumanStage, HumanError> {
+        self.stage_to(None, cancelled)
+    }
+    pub fn stage_in(
+        &self,
+        directory: &Path,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<HumanStage, HumanError> {
+        self.stage_to(Some(directory), cancelled)
+    }
+    fn stage_to(
+        &self,
+        directory: Option<&Path>,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<HumanStage, HumanError> {
         let began = Instant::now();
         let check = || {
             if cancelled() || began.elapsed() > Duration::from_secs(30) {
@@ -394,7 +415,14 @@ impl HumanReader {
         };
         check()?;
         let version = self.data_version()?;
-        let file = tempfile::NamedTempFile::new().map_err(|_| HumanError("staging_failed"))?;
+        let file = match directory {
+            Some(directory) => tempfile::Builder::new()
+                .prefix(&staging_prefix(&self.path)?)
+                .suffix(".db")
+                .tempfile_in(directory),
+            None => tempfile::NamedTempFile::new(),
+        }
+        .map_err(|_| HumanError("staging_failed"))?;
         let conn = Connection::open(file.path()).map_err(|_| HumanError("staging_failed"))?;
         conn.execute_batch("PRAGMA cache_size=-2048; CREATE TABLE records(native_id TEXT PRIMARY KEY,captured_at INTEGER,duration_ms INTEGER,kind TEXT,content_hash BLOB) WITHOUT ROWID;").map_err(|_| HumanError("staging_failed"))?;
         let staging = conn

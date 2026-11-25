@@ -45,6 +45,7 @@ struct Shared {
     epoch: AtomicU64,
     stopping: AtomicBool,
     cache: PathBuf,
+    staging: PathBuf,
     notify: Box<dyn Fn(HumanSyncStatus) + Send + Sync>,
 }
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -77,7 +78,7 @@ pub struct HumanRuntime {
 impl HumanRuntime {
     pub fn new(
         cache: PathBuf,
-        _staging: PathBuf,
+        staging: PathBuf,
         notify: impl Fn(HumanSyncStatus) + Send + Sync + 'static,
     ) -> Self {
         let shared = Arc::new(Shared {
@@ -95,6 +96,7 @@ impl HumanRuntime {
             epoch: AtomicU64::new(1),
             stopping: AtomicBool::new(false),
             cache,
+            staging,
             notify: Box::new(notify),
         });
         let state = shared.clone();
@@ -267,7 +269,10 @@ fn run(shared: Arc<Shared>) {
             if !force && version == Some(source.data_version().map_err(|e| e.to_string())?) {
                 return Ok(None);
             }
-            let stage = source.stage(cancelled).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(&shared.staging).map_err(|_| "staging_failed")?;
+            let stage = source
+                .stage_in(&shared.staging, cancelled)
+                .map_err(|e| e.to_string())?;
             if cancelled() {
                 return Err("sync_cancelled".into());
             }
