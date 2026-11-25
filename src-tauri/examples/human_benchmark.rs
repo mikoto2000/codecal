@@ -61,6 +61,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(error) => serde_json::json!({"ms":elapsed,"error":error.to_string()}),
             };
         }
+        for (name, from) in [
+            (
+                "last_day",
+                base + count.saturating_sub(1440) as i64 * 60_000,
+            ),
+            (
+                "empty_future_day",
+                base + count as i64 * 60_000 + 86_400_000,
+            ),
+        ] {
+            let start = Instant::now();
+            let response = store.human_activity(&sources, from, from + 86_400_000)?;
+            metrics[name] = serde_json::json!({"ms":start.elapsed().as_secs_f64()*1000.0,"records":response.records.len()});
+        }
         for scenario in ["one_added", "one_updated", "ai_only"] {
             match scenario {
                 "one_added" => {

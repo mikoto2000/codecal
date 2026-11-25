@@ -13,7 +13,10 @@ fn opens_known_legacy_v3_without_losing_history_settings_or_claude_cache() {
     let path = tmp.path().join("old.db");
     drop(Store::open(&path).unwrap());
     let c = Connection::open(&path).unwrap();
-    c.execute_batch("CREATE TABLE claude_files(path TEXT PRIMARY KEY,fingerprint TEXT NOT NULL);
+    c.execute_batch("DROP TABLE human_activity_records;
+        DROP TABLE human_activity_sources;
+        DELETE FROM schema_migrations WHERE version>3;
+        CREATE TABLE claude_files(path TEXT PRIMARY KEY,fingerprint TEXT NOT NULL);
         INSERT INTO claude_files VALUES('/synthetic/session.jsonl','cached');
         INSERT INTO projects VALUES('p','/synthetic','Custom name','#123456',1000);
         INSERT INTO sessions VALUES('s','p',0,1000);

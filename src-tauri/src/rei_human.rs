@@ -745,7 +745,9 @@ impl crate::store::Store {
                 for d in ds {
                     *counts.entry(d.code).or_insert(0) += d.count;
                 }
-                let mut query = self.conn.prepare("SELECT native_id,CASE WHEN typeof(content_hash)='blob' THEN hex(content_hash) ELSE upper(content_hash) END,captured_at,effective_end,kind FROM human_activity_records WHERE source_id=? AND captured_at<? AND (effective_end>? OR (effective_end=captured_at AND captured_at>=?)) ORDER BY captured_at,native_id").map_err(cache_read_error)?;
+                // Representatives do not overlap inside a source. Include its
+                // one preceding representative, then seek only this time range.
+                let mut query = self.conn.prepare("SELECT native_id,CASE WHEN typeof(content_hash)='blob' THEN hex(content_hash) ELSE upper(content_hash) END,captured_at,effective_end,kind FROM human_activity_records WHERE source_id=?1 AND captured_at>=coalesce((SELECT max(p.captured_at) FROM human_activity_records p INDEXED BY human_activity_start WHERE p.source_id=?1 AND p.captured_at<?3 AND p.effective_end IS NOT NULL),?3) AND captured_at<?2 AND (effective_end>?3 OR (effective_end=captured_at AND captured_at>=?4)) ORDER BY captured_at,native_id").map_err(cache_read_error)?;
                 let mut rows = query
                     .query(params![&key, to, from, from])
                     .map_err(cache_read_error)?;
