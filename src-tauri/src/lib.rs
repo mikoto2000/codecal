@@ -1,5 +1,6 @@
 pub mod activity;
 pub mod claude;
+pub mod human_runtime;
 #[cfg(feature = "desktop")]
 mod desktop;
 mod migrations;
