@@ -1,5 +1,7 @@
 # CodeCal
 
+人間アクティビティ可視化は現在設計段階です。利用可能な機能・設定はまだ追加していません。[設計とプライバシー方針](docs/human-activity-design.md)、[予備性能計測](docs/human-activity-performance.md)、[フェーズ別テストリスト](docs/human-activity-test-list.md)を参照してください。
+
 Codex CLI / Codex デスクトップ、Claude Code と「れい」のローカル実行履歴を読み取り、プロジェクトごとの活動時間をカレンダーで振り返るアプリです。開発以外の実行も含め、開始・終了が記録された時間を集計します。Windows・macOS・Linux向けに開発しています。ログの外部送信やテレメトリーはありません。
 
 ## 画面例

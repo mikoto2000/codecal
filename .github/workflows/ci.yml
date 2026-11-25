@@ -42,6 +42,8 @@ jobs:
       - name: Install pinned npm
         run: npm install --global npm@11.19.1
       - run: npm ci
+      - name: Check synthetic human activity projection
+        run: python3 -B -m unittest discover -s scripts -p human_activity_probe_test.py
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run format:check
@@ -66,6 +68,8 @@ jobs:
       - name: Install pinned npm
         run: npm install --global npm@11.19.1
       - run: npm ci
+      - name: Check synthetic human activity projection
+        run: python -B -m unittest discover -s scripts -p human_activity_probe_test.py
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run format:check
