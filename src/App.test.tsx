@@ -19,6 +19,11 @@ vi.mock("./api", () => ({
     project: vi.fn(),
     excerpt: vi.fn(),
     events: vi.fn(),
+    humanActivity: vi.fn(),
+    humanStatus: vi.fn(),
+    humanEvents: vi.fn(),
+    humanSync: vi.fn(),
+    humanClear: vi.fn(),
   },
 }));
 const data: Snapshot = {
@@ -74,11 +79,89 @@ beforeEach(() => {
   });
   vi.mocked(api.events).mockResolvedValue(() => {});
   vi.mocked(api.save).mockResolvedValue([]);
+  vi.mocked(api.humanActivity).mockResolvedValue({
+    records: [],
+    diagnostics: [],
+  });
+  vi.mocked(api.humanStatus).mockResolvedValue({
+    generation: 2,
+    busy: false,
+    revision: 1,
+    error: null,
+    last_success: null,
+  });
+  vi.mocked(api.humanEvents).mockResolvedValue(() => {});
+  vi.mocked(api.humanSync).mockResolvedValue(undefined);
+  vi.mocked(api.humanClear).mockResolvedValue({
+    compacted: true,
+    staging_cleared: true,
+  });
 });
 const mount = async () => {
   render(<App initialDate="2026-11-20" />);
   await screen.findByRole("button", { name: /Sample project.*10:00/ });
 };
+it("enables human activity independently only after successful settings save", async () => {
+  await mount();
+  expect(api.humanActivity).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  const checkbox =
+    screen.getByLabelText("人間のアクティビティ機能を有効にする");
+  expect(checkbox).not.toBeChecked();
+  fireEvent.click(checkbox);
+  expect(screen.getByLabelText("れい データディレクトリ")).toBeEnabled();
+  expect(api.humanActivity).not.toHaveBeenCalled();
+  vi.mocked(api.save).mockRejectedValueOnce(
+    new Error("synthetic settings failure"),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
+  await screen.findByText("Error: synthetic settings failure");
+  expect(api.humanActivity).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
+  await waitFor(() => expect(api.humanActivity).toHaveBeenCalled());
+  expect(api.save).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      rei_enabled: false,
+      human_activity_enabled: true,
+    }),
+  );
+});
+it("cancels human settings edits and confirms cache deletion while OFF", async () => {
+  await mount();
+  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  fireEvent.click(
+    screen.getByLabelText("人間のアクティビティ機能を有効にする"),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "閉じる" }));
+  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  expect(
+    screen.getByLabelText("人間のアクティビティ機能を有効にする"),
+  ).not.toBeChecked();
+  fireEvent.change(screen.getByLabelText("タイムゾーン", { exact: true }), {
+    target: { value: "Asia/Tokyo" },
+  });
+  fireEvent.click(
+    screen.getByRole("button", { name: "人間のアクティビティ履歴を削除する" }),
+  );
+  expect(api.humanClear).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByLabelText("すべてのソース"));
+  fireEvent.click(
+    screen.getByRole("button", { name: "履歴を削除して機能をOFFにする" }),
+  );
+  await waitFor(() => expect(api.humanClear).toHaveBeenCalledWith(true));
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("dialog", { name: "人間のアクティビティ履歴の削除" }),
+    ).not.toBeInTheDocument(),
+  );
+  expect(screen.getByLabelText("タイムゾーン", { exact: true })).toHaveValue(
+    "Asia/Tokyo",
+  );
+  expect(
+    screen.getByLabelText("人間のアクティビティ機能を有効にする"),
+  ).not.toBeChecked();
+  expect(api.humanActivity).not.toHaveBeenCalled();
+});
 it("returns focus to the settings trigger and associates the visible dialog title", async () => {
   await mount();
   const trigger = screen.getByRole("button", { name: "設定" });
@@ -477,7 +560,7 @@ it("saves the Rei source independently of Codex", async () => {
   fireEvent.click(screen.getByRole("button", { name: "設定" }));
   const root = screen.getByLabelText("れい データディレクトリ");
   expect(root).toBeDisabled();
-  fireEvent.click(screen.getByLabelText("れいの実行履歴を取り込む"));
+  fireEvent.click(screen.getByLabelText("れいの AI 実行履歴を取り込む"));
   fireEvent.change(root, { target: { value: "/rei-data" } });
   fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
   await waitFor(() =>
@@ -536,7 +619,7 @@ it("does not scan for auto-refresh or unchanged saves, but does scan for source 
   fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
   await waitFor(() => expect(api.sync).toHaveBeenCalledTimes(1));
   fireEvent.click(screen.getByRole("button", { name: "設定" }));
-  fireEvent.click(screen.getByLabelText("れいの実行履歴を取り込む"));
+  fireEvent.click(screen.getByLabelText("れいの AI 実行履歴を取り込む"));
   fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
   await waitFor(() => expect(api.sync).toHaveBeenCalledTimes(2));
   fireEvent.click(screen.getByRole("button", { name: "設定" }));

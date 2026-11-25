@@ -12,6 +12,7 @@ import {
 } from "react";
 import { DateTime } from "luxon";
 import { api } from "./api";
+import { useHumanActivity } from "./useHumanActivity";
 import { useTimelineZoom } from "./useTimelineZoom";
 import {
   groupActivity,
@@ -184,6 +185,11 @@ export default function App({ initialDate }: { initialDate?: string }) {
   const [bootNotices, setBootNotices] = useState<string[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [watchWarning, setWatchWarning] = useState("");
+  const [showClearHuman, setShowClearHuman] = useState(false);
+  const [clearAllHuman, setClearAllHuman] = useState(false);
+  const [clearingHuman, setClearingHuman] = useState(false);
+  const [humanClearNotice, setHumanClearNotice] = useState("");
+  const [humanClearError, setHumanClearError] = useState("");
   const timezoneChoices = useMemo(() => {
     try {
       return ["UTC", ...Intl.supportedValuesOf("timeZone")];
@@ -299,6 +305,20 @@ export default function App({ initialDate }: { initialDate?: string }) {
     () => daysInView(anchor, view, config?.week_start ?? 1),
     [anchor, view, config?.week_start],
   );
+  const humanFrom = DateTime.fromISO(days[0], { zone })
+    .startOf("day")
+    .toMillis();
+  const humanTo = DateTime.fromISO(days[days.length - 1], { zone })
+    .startOf("day")
+    .plus({ days: 1 })
+    .toMillis();
+  const human = useHumanActivity({
+    enabled: config?.human_activity_enabled === true,
+    root: config?.rei_root ?? "",
+    from: humanFrom,
+    to: humanTo,
+    zone,
+  });
   const visibleDays =
     view === "month"
       ? days.filter((d) => d.slice(0, 7) === anchor.slice(0, 7))
@@ -401,7 +421,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
     setShowDiagnostics(true);
   };
   const save = async () => {
-    if (!draft || saving) return;
+    if (!draft || saving || clearingHuman) return;
     const sourceChanged =
       !config ||
       draft.log_root !== config.log_root ||
@@ -434,6 +454,26 @@ export default function App({ initialDate }: { initialDate?: string }) {
     } catch (e) {
       if (warnings.length) setSettingsError(String(e));
       else setError(String(e));
+    }
+  };
+  const clearHuman = async () => {
+    if (clearingHuman || saving) return;
+    setClearingHuman(true);
+    setHumanClearError("");
+    try {
+      const result = await api.humanClear(clearAllHuman);
+      setConfig((c) => (c ? { ...c, human_activity_enabled: false } : c));
+      setDraft((c) => (c ? { ...c, human_activity_enabled: false } : c));
+      setHumanClearNotice(
+        `キャッシュDBの履歴を削除し、人間のアクティビティ機能をOFFにしました。再度ONにすると原本から再取り込みされます。${result.compacted ? "" : " WAL・空きページの回収は未完了です。"}${result.staging_cleared ? "" : " 一時ファイルの回収が未完了です。削除を再試行してください。"}`,
+      );
+      setShowClearHuman(false);
+    } catch {
+      setHumanClearError(
+        "人間のアクティビティ履歴を削除できませんでした。再試行してください。",
+      );
+    } finally {
+      setClearingHuman(false);
     }
   };
   const dateText = (ms: number) =>
@@ -667,6 +707,45 @@ export default function App({ initialDate }: { initialDate?: string }) {
               ×
             </button>
           </div>
+        )}
+        {config?.human_activity_enabled && (
+          <section
+            className="human-sync"
+            aria-label="人間のアクティビティ同期"
+            aria-busy={human.status.busy || human.loading}
+          >
+            <p role="status">
+              {human.status.busy
+                ? "人間のアクティビティを同期中…"
+                : human.loading
+                  ? "人間のアクティビティを取得中…"
+                  : human.error || human.status.error
+                    ? "人間のアクティビティの同期・取得結果を確認してください。"
+                    : human.status.last_success !== null
+                      ? "人間のアクティビティの前回同期は完了しています。"
+                      : "人間のアクティビティの同期結果を待っています。"}
+            </p>
+            {(human.error || human.status.error) && (
+              <p role="alert">
+                {human.error === "period_too_dense"
+                  ? "この期間の人間の記録が多すぎます。日・週表示へ移動してください。"
+                  : "人間のアクティビティを読み取れません。設定または原本を確認して再試行してください。"}
+              </p>
+            )}
+            {human.diagnostics.length > 0 && (
+              <p>
+                ソース全体の診断:{" "}
+                {human.diagnostics.reduce((sum, d) => sum + d.count, 0)}
+                件（不正な観測や長い推定など）
+              </p>
+            )}
+            <button
+              onClick={human.retry}
+              disabled={human.status.busy || human.loading}
+            >
+              人間のアクティビティを再同期
+            </button>
+          </section>
         )}
         <section className="summary-cards" aria-label="表示期間の集計">
           <div>
@@ -1332,13 +1411,13 @@ export default function App({ initialDate }: { initialDate?: string }) {
                   setDraft({ ...draft, rei_enabled: e.target.checked })
                 }
               />
-              れいの実行履歴を取り込む
+              れいの AI 実行履歴を取り込む
             </label>
             <label>
               れい データディレクトリ
               <input
                 value={draft.rei_root}
-                disabled={!draft.rei_enabled}
+                disabled={!draft.rei_enabled && !draft.human_activity_enabled}
                 onChange={(e) =>
                   setDraft({ ...draft, rei_root: e.target.value })
                 }
@@ -1348,6 +1427,36 @@ export default function App({ initialDate }: { initialDate?: string }) {
               storage.db または projects
               を含むディレクトリを指定してください。開発以外の実行も取り込みます。
             </p>
+            <label className="inline-check">
+              <input
+                type="checkbox"
+                checked={draft.human_activity_enabled ?? false}
+                onChange={(e) =>
+                  setDraft({
+                    ...draft,
+                    human_activity_enabled: e.target.checked,
+                  })
+                }
+              />
+              人間のアクティビティ機能を有効にする
+            </label>
+            <p className="hint">
+              人間の観測には storage.db
+              を使用します。娯楽・非娯楽・不明の種別と推定時間だけを取り込みます。非娯楽は仕事や生産性を意味しません。不明は観測済みで分類が未確定の状態で、未観測の空白は含みません。OFFでもキャッシュを保持します。Rei
+              自体の観測は停止しません。
+            </p>
+            <button
+              type="button"
+              disabled={saving || clearingHuman}
+              onClick={() => {
+                setClearAllHuman(false);
+                setHumanClearError("");
+                setShowClearHuman(true);
+              }}
+            >
+              人間のアクティビティ履歴を削除する
+            </button>
+            {humanClearNotice && <p role="status">{humanClearNotice}</p>}
             <label>
               タイムゾーン
               <input
@@ -1433,7 +1542,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
               />
               自動更新を有効にする
             </label>
-            <button className="primary" disabled={saving}>
+            <button className="primary" disabled={saving || clearingHuman}>
               {saving ? "保存中…" : "設定を保存"}
             </button>
           </form>
@@ -1446,6 +1555,60 @@ export default function App({ initialDate }: { initialDate?: string }) {
               error={setSettingsError}
             />
           ))}
+        </Modal>
+      )}
+      {showClearHuman && (
+        <Modal
+          title="人間のアクティビティ履歴の削除"
+          close={() => {
+            if (!clearingHuman) setShowClearHuman(false);
+          }}
+        >
+          <p>
+            CodeCal
+            の人間キャッシュを削除し、この機能をOFFにします。再度ONにすると原本から再取り込みされます。
+          </p>
+          <p>
+            現在のソースは保存済み設定のデータディレクトリです。AI履歴とRei原本は保持します。
+          </p>
+          <fieldset disabled={clearingHuman}>
+            <legend>削除対象</legend>
+            <label className="inline-check">
+              <input
+                type="radio"
+                name="human-clear-scope"
+                checked={!clearAllHuman}
+                onChange={() => setClearAllHuman(false)}
+              />
+              現在のソース
+            </label>
+            <label className="inline-check">
+              <input
+                type="radio"
+                name="human-clear-scope"
+                checked={clearAllHuman}
+                onChange={() => setClearAllHuman(true)}
+              />
+              すべてのソース
+            </label>
+          </fieldset>
+          <p className="hint">
+            論理削除です。WAL・空きページ・管理一時領域の回収も試みますが、OSや外部バックアップを含む物理的な完全消去は保証しません。
+          </p>
+          {humanClearError && <p role="alert">{humanClearError}</p>}
+          <button
+            disabled={clearingHuman}
+            onClick={() => setShowClearHuman(false)}
+          >
+            キャンセル
+          </button>
+          <button
+            className="primary"
+            disabled={clearingHuman}
+            onClick={() => void clearHuman()}
+          >
+            {clearingHuman ? "削除中…" : "履歴を削除して機能をOFFにする"}
+          </button>
         </Modal>
       )}
       {showDiagnostics && (

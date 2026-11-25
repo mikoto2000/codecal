@@ -6,9 +6,150 @@ import {
   type Page,
 } from "@playwright/test";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import { appendFileSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  writeFileSync,
+  existsSync,
+  readFileSync,
+} from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { HumanActivityResponse, Snapshot } from "../../src/types";
+
+test("human settings: isolated IPC, WAL updates, OFF restart and confirmed cache clear", async () => {
+  test.setTimeout(120000);
+  mkdirSync(path.join(logs, "sessions"), { recursive: true });
+  const humanRoot = path.join(root, "human-only");
+  mkdirSync(humanRoot, { recursive: true });
+  const db = new DatabaseSync(path.join(humanRoot, "storage.db"));
+  const marker = "PRIVATE_NATIVE_HUMAN_CONTENT";
+  const captured = Date.parse("2026-11-20T01:00:00Z");
+  db.exec(
+    "PRAGMA journal_mode=WAL; CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT)",
+  );
+  db.prepare("INSERT INTO activity_records VALUES(?,?,?)").run(
+    "human-synthetic-id",
+    captured,
+    JSON.stringify({
+      durationEstimate: 120,
+      foreground: { title: marker },
+      detection: { diagnostics: { entertainmentDisposition: "ENTERTAINMENT" } },
+    }),
+  );
+  const ipc = <T>(command: string, args: Record<string, unknown> = {}) =>
+    page.evaluate(
+      ({ command, args }) => {
+        const host = window as unknown as {
+          __TAURI_INTERNALS__: {
+            invoke: (
+              command: string,
+              args: Record<string, unknown>,
+            ) => Promise<unknown>;
+          };
+        };
+        return host.__TAURI_INTERNALS__.invoke(command, args);
+      },
+      { command, args },
+    ) as Promise<T>;
+  const period = () =>
+    ipc<HumanActivityResponse>("human_activity", {
+      from: captured,
+      to: captured + 86400000,
+    });
+  try {
+    await launch();
+    await expect(page.getByRole("main")).toHaveAttribute("aria-busy", "false");
+    await expect(period()).rejects.toThrow(/human_activity_disabled/);
+    const before = await ipc<Snapshot>("snapshot", { timezone: "UTC" });
+    await page.getByRole("button", { name: "設定", exact: true }).click();
+    await page.getByLabel("れいの AI 実行履歴を取り込む").uncheck();
+    await page.getByLabel("Claude Code の履歴を取り込む").uncheck();
+    await page.getByLabel("人間のアクティビティ機能を有効にする").check();
+    await page.getByLabel("れい データディレクトリ").fill(humanRoot);
+    await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+    await expect.poll(async () => (await period()).records.length).toBe(1);
+    const response = await period();
+    expect(response.records[0]).toEqual({
+      start: captured,
+      end: captured + 120000,
+      kind: "entertainment",
+    });
+    expect(Object.keys(response.records[0]).sort()).toEqual([
+      "end",
+      "kind",
+      "start",
+    ]);
+    expect(JSON.stringify(response)).not.toContain(marker);
+    expect(JSON.stringify(response)).not.toContain("human-synthetic-id");
+    expect(
+      (await ipc<Snapshot>("snapshot", { timezone: "UTC" })).turns,
+    ).toHaveLength(before.turns.length);
+    await expect(page.locator("body")).not.toContainText(marker);
+    await expect(
+      ipc("human_activity", { from: captured, to: captured + 63 * 86400000 }),
+    ).rejects.toThrow(/invalid_period/);
+    db.exec(
+      "UPDATE activity_records SET payload=json_set(payload,'$.durationEstimate',180)",
+    );
+    await expect
+      .poll(async () => (await period()).records[0]?.end, { timeout: 40000 })
+      .toBe(captured + 180000);
+    const cachePath = path.join(appdata, "codecal.db");
+    for (const file of [cachePath, `${cachePath}-wal`, `${cachePath}-shm`]) {
+      if (existsSync(file))
+        expect(readFileSync(file).includes(Buffer.from(marker))).toBe(false);
+    }
+    await page.getByRole("button", { name: "設定", exact: true }).click();
+    await page.getByLabel("人間のアクティビティ機能を有効にする").uncheck();
+    await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+    await expect(
+      page.getByRole("region", { name: "人間のアクティビティ同期" }),
+    ).toHaveCount(0);
+    await expect(period()).rejects.toThrow(/human_activity_disabled/);
+    await stop();
+    await launch();
+    await page.getByRole("button", { name: "設定", exact: true }).click();
+    await expect(
+      page.getByLabel("人間のアクティビティ機能を有効にする"),
+    ).not.toBeChecked();
+    await page
+      .getByRole("button", { name: "人間のアクティビティ履歴を削除する" })
+      .click();
+    const confirmation = page.getByRole("dialog", {
+      name: "人間のアクティビティ履歴の削除",
+    });
+    await confirmation.getByLabel("すべてのソース").check();
+    await confirmation
+      .getByRole("button", { name: "履歴を削除して機能をOFFにする" })
+      .click();
+    await expect(confirmation).not.toBeVisible();
+    const cache = new DatabaseSync(cachePath);
+    try {
+      expect(
+        cache.prepare("SELECT count(*) AS n FROM human_activity_records").get()
+          ?.n,
+      ).toBe(0);
+    } finally {
+      cache.close();
+    }
+    expect(
+      db.prepare("SELECT count(*) AS n FROM activity_records").get()?.n,
+    ).toBe(1);
+    expect(
+      db.prepare("SELECT payload FROM activity_records").get()?.payload,
+    ).toContain(marker);
+    await page.getByLabel("人間のアクティビティ機能を有効にする").check();
+    await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+    await expect.poll(async () => (await period()).records.length).toBe(1);
+    await page.getByRole("button", { name: "設定", exact: true }).click();
+    await page.getByLabel("人間のアクティビティ機能を有効にする").uncheck();
+    await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+  } finally {
+    await stop();
+    db.close();
+  }
+});
 declare global {
   interface Window {
     __observedBusy: boolean;
@@ -534,7 +675,7 @@ test("Rei SQLite: settings, WAL import, source detail, automatic append and rest
   try {
     await launch();
     await page.getByRole("button", { name: "設定", exact: true }).click();
-    await page.getByLabel("れいの実行履歴を取り込む").check();
+    await page.getByLabel("れいの AI 実行履歴を取り込む").check();
     await page.getByLabel("れい データディレクトリ").fill(reiRoot);
     await page.getByRole("button", { name: "設定を保存", exact: true }).click();
     await expect(page.getByLabel("れいサンプル を表示")).toBeVisible();
@@ -573,7 +714,7 @@ test("Rei SQLite: settings, WAL import, source detail, automatic append and rest
     await launch();
     await expect(page.getByLabel("れいサンプル を表示")).toBeVisible();
     await page.getByRole("button", { name: "設定", exact: true }).click();
-    await expect(page.getByLabel("れいの実行履歴を取り込む")).toBeChecked();
+    await expect(page.getByLabel("れいの AI 実行履歴を取り込む")).toBeChecked();
     await expect(page.getByLabel("れい データディレクトリ")).toHaveValue(
       reiRoot,
     );
