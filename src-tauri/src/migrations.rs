@@ -3,7 +3,7 @@ use crate::store::err;
 use rusqlite::{Connection, MAIN_DB};
 use std::path::Path;
 
-const VERSION: i64 = 3;
+const VERSION: i64 = 4;
 
 fn columns(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
     // All identifiers passed here are constants from this module.
@@ -13,7 +13,7 @@ fn columns(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
     let rows = q.query_map([], |r| r.get(1)).map_err(err)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(err)
 }
-fn validate(conn: &Connection) -> Result<(), String> {
+fn validate_base(conn: &Connection) -> Result<(), String> {
     for (table, expected) in [
         ("schema_migrations", "version"),
         ("projects", "id,cwd,name,color,last_seen"),
@@ -40,6 +40,24 @@ fn validate(conn: &Connection) -> Result<(), String> {
     }
     Ok(())
 }
+fn validate(conn: &Connection) -> Result<(), String> {
+    validate_base(conn)?;
+    for (table, expected) in [
+        (
+            "human_activity_sources",
+            "source_id,source_path,file_identity,reader_version,last_sync,sync_status,diagnostics",
+        ),
+        (
+            "human_activity_records",
+            "source_id,native_id,captured_at,duration_ms,kind,content_hash,effective_end",
+        ),
+    ] {
+        if columns(conn, table)?.join(",") != expected {
+            return Err("人間アクティビティキャッシュの構造に対応していません".into());
+        }
+    }
+    Ok(())
+}
 fn backup(conn: &Connection, path: &Path) -> Result<(), String> {
     if !path.is_file() {
         return Ok(());
@@ -58,7 +76,7 @@ fn backup(conn: &Connection, path: &Path) -> Result<(), String> {
         .file_name()
         .ok_or("DBのファイル名が不正です")?
         .to_os_string();
-    name.push(".before-v3.bak");
+    name.push(".before-v4.bak");
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -66,6 +84,7 @@ fn backup(conn: &Connection, path: &Path) -> Result<(), String> {
     let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(err)?;
     conn.backup(MAIN_DB, temporary.path(), None)
         .map_err(|e| format!("DB移行前のバックアップに失敗しました: {e}"))?;
+    crate::storage::exclude_human_cache(temporary.path())?;
     for sequence in 0_u64.. {
         let mut candidate = name.clone();
         if sequence > 0 {
@@ -108,6 +127,10 @@ pub(crate) fn migrate(
     if version == VERSION {
         validate(conn)?;
     } else {
+        // v3 was a validated baseline, not an uninitialized database.
+        if version == 3 {
+            validate_base(conn)?;
+        }
         on_migration();
         backup(conn, path)?;
     }
@@ -163,9 +186,22 @@ pub(crate) fn migrate(
         CREATE TABLE IF NOT EXISTS rei_file_sync(path TEXT PRIMARY KEY,offset INTEGER NOT NULL,head TEXT NOT NULL,head_len INTEGER NOT NULL,identity TEXT NOT NULL);").map_err(err)?;
     // v2 -> v3: establish a validated compatibility baseline. The historical
     // claude_files cache is optional and is deliberately left untouched.
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS human_activity_sources(
+        source_id TEXT PRIMARY KEY,source_path TEXT NOT NULL,file_identity TEXT NOT NULL,
+        reader_version INTEGER NOT NULL,last_sync INTEGER NOT NULL,
+        sync_status TEXT NOT NULL,diagnostics TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS human_activity_records(
+        source_id TEXT NOT NULL REFERENCES human_activity_sources(source_id) ON DELETE CASCADE,
+        native_id TEXT NOT NULL,captured_at INTEGER NOT NULL,duration_ms INTEGER NOT NULL CHECK(duration_ms>=0),
+        kind TEXT NOT NULL CHECK(kind IN ('entertainment','non_entertainment','unknown')),
+        content_hash TEXT NOT NULL,effective_end INTEGER,
+        PRIMARY KEY(source_id,native_id));
+        CREATE INDEX IF NOT EXISTS human_activity_start ON human_activity_records(source_id,captured_at,native_id);
+        CREATE INDEX IF NOT EXISTS human_activity_end ON human_activity_records(source_id,effective_end);
+        CREATE INDEX IF NOT EXISTS human_activity_source_path ON human_activity_sources(source_path,last_sync);").map_err(err)?;
     validate(&tx)?;
     tx.execute_batch(
-        "INSERT OR IGNORE INTO schema_migrations VALUES(1),(2),(3); PRAGMA user_version=3;",
+        "INSERT OR IGNORE INTO schema_migrations VALUES(1),(2),(3),(4); PRAGMA user_version=4;",
     )
     .map_err(err)?;
     tx.commit().map_err(err)

@@ -3,6 +3,39 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+
+/// Sanitize only a newly created CodeCal copy, never a Rei/source database.
+pub(crate) fn exclude_human_cache(copy: &Path) -> Result<(), String> {
+    let sanitize = || -> rusqlite::Result<()> {
+        let mut conn = Connection::open(copy)?;
+        let tables = ["human_activity_records", "human_activity_sources"];
+        let present = tables
+            .iter()
+            .map(|table| {
+                conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)",
+                    [table],
+                    |r| r.get::<_, bool>(0),
+                )
+            })
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if !present.iter().any(|v| *v) {
+            return Ok(());
+        }
+        conn.pragma_update(None, "secure_delete", true)?;
+        let tx = conn.transaction()?;
+        for (table, exists) in tables.iter().zip(present) {
+            if exists {
+                tx.execute(&format!("DELETE FROM {table}"), [])?;
+            }
+        }
+        tx.commit()?;
+        // Rebuild this private copy so freed pages do not carry cached records.
+        conn.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")?;
+        Ok(())
+    };
+    sanitize().map_err(|_| "CodeCalのコピーから人間キャッシュを除外できません".into())
+}
 /// Local machine data takes priority. Keep any former roaming database intact.
 pub fn prepare_database(local: &Path, previous: &Path) -> Result<PathBuf, String> {
     fs::create_dir_all(local).map_err(|e| e.to_string())?;

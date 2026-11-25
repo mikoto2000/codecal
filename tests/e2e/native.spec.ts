@@ -687,14 +687,14 @@ test("database startup migrates v2 with backup and reopens compatible legacy v3"
     await stop();
     const current = new DatabaseSync(dbPath);
     expect(current.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: 3,
+      user_version: 4,
     });
     expect(
       current
         .prepare("SELECT value FROM settings WHERE key='migration-test'")
         .get(),
     ).toEqual({ value: "preserved" });
-    const backup = new DatabaseSync(`${dbPath}.before-v3.bak`, {
+    const backup = new DatabaseSync(`${dbPath}.before-v4.bak`, {
       readOnly: true,
     });
     try {
