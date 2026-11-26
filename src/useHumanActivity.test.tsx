@@ -164,3 +164,18 @@ it("requests grouping in the configured timezone and refetches on display-unit c
   await waitFor(() => expect(api.humanActivity).toHaveBeenCalledTimes(2));
   expect(api.humanActivity).toHaveBeenLastCalledWith(0, 1000, false, "UTC");
 });
+it("rechecks the selected physical source after a failed sync even when the revision is unchanged", async () => {
+  vi.mocked(api.humanActivity)
+    .mockResolvedValueOnce({
+      records: [{ start: 1, end: 2, kind: "unknown" }],
+      diagnostics: [],
+    })
+    .mockResolvedValue(empty);
+  const { result } = renderHook(() => useHumanActivity(options));
+  await waitFor(() => expect(result.current.records).toHaveLength(1));
+  await act(async () =>
+    listeners[0]({ ...status, error: "unsupported_source" }),
+  );
+  expect(api.humanActivity).toHaveBeenCalledTimes(2);
+  await waitFor(() => expect(result.current.records).toEqual([]));
+});
