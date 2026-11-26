@@ -13,6 +13,7 @@ const idle: HumanSyncStatus = {
 const allowedErrors = new Set([
   "human_activity_disabled",
   "invalid_period",
+  "invalid_timezone",
   "period_too_dense",
   "source_unavailable",
   "source_replaced",
@@ -35,16 +36,18 @@ export function useHumanActivity({
   from,
   to,
   zone,
+  grouped = false,
 }: {
   enabled: boolean;
   root: string;
   from: number;
   to: number;
   zone: string;
+  grouped?: boolean;
 }) {
   const [attempt, setAttempt] = useState(0);
   const manualAttempt = useRef(0);
-  const key = JSON.stringify([enabled, root, from, to, zone, attempt]);
+  const key = JSON.stringify([enabled, root, from, to, zone, grouped, attempt]);
   const [view, setView] = useState({
     key: "",
     response: empty,
@@ -76,7 +79,7 @@ export function useHumanActivity({
           await api.humanSync();
           if (!alive) return;
         }
-        const response = await api.humanActivity(from, to);
+        const response = await api.humanActivity(from, to, grouped, zone);
         if (alive && n === request)
           setView((v) => ({ ...v, key, response, loading: false, error: "" }));
       } catch (error) {
@@ -153,7 +156,7 @@ export function useHumanActivity({
       ++request;
       unsubscribe?.();
     };
-  }, [enabled, from, to, key, attempt]);
+  }, [enabled, from, to, key, attempt, grouped, zone]);
   const retry = useCallback(() => {
     if (!enabled) return;
     setAttempt((n) => n + 1);

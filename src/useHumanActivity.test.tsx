@@ -153,3 +153,14 @@ it("keeps another period hidden while the new response is pending", async () => 
   expect(result.current.records).toEqual([]);
   await act(async () => later.resolve(empty));
 });
+it("requests grouping in the configured timezone and refetches on display-unit changes", async () => {
+  const { rerender } = renderHook(
+    ({ grouped }) => useHumanActivity({ ...options, grouped }),
+    { initialProps: { grouped: true } },
+  );
+  await waitFor(() => expect(api.humanActivity).toHaveBeenCalledTimes(1));
+  expect(api.humanActivity).toHaveBeenCalledWith(0, 1000, true, "UTC");
+  rerender({ grouped: false });
+  await waitFor(() => expect(api.humanActivity).toHaveBeenCalledTimes(2));
+  expect(api.humanActivity).toHaveBeenLastCalledWith(0, 1000, false, "UTC");
+});
