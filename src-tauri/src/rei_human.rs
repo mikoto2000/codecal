@@ -606,6 +606,63 @@ impl HumanReader {
 }
 
 impl crate::store::Store {
+    /// Display grouping is intentionally restricted to one selected source.
+    pub fn human_activity_display(
+        &self,
+        source: &str,
+        from: i64,
+        to: i64,
+        timezone: &str,
+        grouped: bool,
+    ) -> Result<HumanActivityResponse, HumanError> {
+        if !grouped {
+            return self.human_activity(&[source.to_owned()], from, to);
+        }
+        let tz: chrono_tz::Tz = timezone
+            .parse()
+            .map_err(|_| HumanError("invalid_timezone"))?;
+        let mut response = self.human_activity(&[source.to_owned()], from, to)?;
+        let mut out: Vec<HumanActivity> = vec![];
+        let mut last_date = None;
+        for record in response.records {
+            let mut start = record.start.max(from);
+            let end = record.end.min(to);
+            loop {
+                let local = chrono::DateTime::from_timestamp_millis(start)
+                    .ok_or(HumanError("cache_read_failed"))?
+                    .with_timezone(&tz);
+                let date = local.date_naive();
+                let boundary = crate::activity::next_day_boundary(&local)
+                    .map_err(|_| HumanError("cache_read_failed"))?;
+                let stop = end.min(boundary);
+                if let Some(previous) = out.last_mut().filter(|previous| {
+                    last_date == Some(date)
+                        && previous.kind == record.kind
+                        && previous.end == start
+                        && previous.start < previous.end
+                        && start < stop
+                }) {
+                    previous.end = stop;
+                } else {
+                    if out.len() == 50_000 {
+                        return Err(HumanError("period_too_dense"));
+                    }
+                    out.push(HumanActivity {
+                        start,
+                        end: stop,
+                        kind: record.kind,
+                    });
+                }
+                last_date = Some(date);
+                if stop >= end {
+                    break;
+                }
+                start = stop;
+            }
+        }
+        response.records = out;
+        Ok(response)
+    }
     fn prepare_human_changes(
         &self,
         stage: &HumanStage,
