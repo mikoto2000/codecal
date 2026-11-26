@@ -659,3 +659,42 @@ fn unavailable_source_keeps_cache_and_periodic_check_retries_without_notificatio
     assert!(runtime.status().error.is_none());
     assert_eq!(runtime.period(0, 10000).unwrap().records.len(), 1);
 }
+
+#[test]
+fn display_grouping_never_joins_the_previous_source_after_switching_roots() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache.db");
+    drop(Store::open(&cache).unwrap());
+    let first = tmp.path().join("first");
+    source(&first);
+    let second = tmp.path().join("second");
+    source(&second);
+    rusqlite::Connection::open(second.join("storage.db"))
+        .unwrap()
+        .execute_batch("UPDATE activity_records SET captured_at=3000;")
+        .unwrap();
+    let runtime = HumanRuntime::new(cache, tmp.path().join("staging"), |_| {});
+    for (root, expected) in [
+        (&first, (1000, 3000)),
+        (&second, (3000, 5000)),
+        (&first, (1000, 3000)),
+    ] {
+        runtime
+            .configure(
+                HumanPreferences {
+                    enabled: true,
+                    root: root.clone(),
+                    auto_refresh: false,
+                },
+                || Ok(()),
+            )
+            .unwrap();
+        synced(&runtime, 1);
+        let response = runtime.period_display(0, 10000, "UTC", true).unwrap();
+        assert_eq!(response.records.len(), 1);
+        assert_eq!(
+            (response.records[0].start, response.records[0].end),
+            expected
+        );
+    }
+}

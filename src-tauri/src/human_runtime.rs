@@ -286,10 +286,24 @@ impl HumanRuntime {
         })
     }
     pub fn period(&self, from: i64, to: i64) -> Result<HumanActivityResponse, String> {
+        self.period_display(from, to, "UTC", false)
+    }
+    pub fn period_display(
+        &self,
+        from: i64,
+        to: i64,
+        timezone: &str,
+        grouped: bool,
+    ) -> Result<HumanActivityResponse, String> {
         let _gate = lock(&self.shared.gate);
         let control = lock(&self.shared.control);
         if !control.preferences.enabled {
             return Err("human_activity_disabled".into());
+        }
+        if grouped {
+            timezone
+                .parse::<chrono_tz::Tz>()
+                .map_err(|_| "invalid_timezone")?;
         }
         let path = control.preferences.root.join("storage.db");
         drop(control);
@@ -302,10 +316,11 @@ impl HumanRuntime {
                 store.conn.query_row("SELECT CASE WHEN typeof(source_id)='blob' THEN lower(hex(source_id)) ELSE source_id END FROM human_activity_sources WHERE source_path=? ORDER BY last_sync DESC,source_id DESC LIMIT 1", [&logical], |r| r.get::<_,String>(0)).optional().map_err(|_| "cache_read_failed")?
             }
         };
-        let sources: Vec<String> = current.into_iter().collect();
-        store
-            .human_activity(&sources, from, to)
-            .map_err(|e| e.to_string())
+        match current {
+            Some(source) => store.human_activity_display(&source, from, to, timezone, grouped),
+            None => store.human_activity(&[], from, to),
+        }
+        .map_err(|e| e.to_string())
     }
 }
 impl Drop for HumanRuntime {
