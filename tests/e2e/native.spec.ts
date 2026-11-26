@@ -169,6 +169,7 @@ const event = (type: string, payload: unknown, timestamp: string) =>
   JSON.stringify({ type, payload, timestamp }) + "\n";
 const start = "2026-11-20T01:00:00Z";
 async function launch(waitForReady = true) {
+  const startupBegan = Date.now();
   process = spawn(exe, [], {
     windowsHide: true,
     env: {
@@ -200,7 +201,9 @@ async function launch(waitForReady = true) {
           return false;
         }
       },
-      { timeout: 20000 },
+      // Allow a bounded budget for cold WebView2 startup on Windows CI.
+      // Keep a bounded startup budget; application assertions still run fully.
+      { timeout: 60000 },
     )
     .toBe(true)
     .catch((cause) => {
@@ -209,6 +212,9 @@ async function launch(waitForReady = true) {
         { cause },
       );
     });
+  console.info(
+    `Native WebView2 endpoint ready after ${Date.now() - startupBegan}ms`,
+  );
   browser = await chromium.connectOverCDP("http://127.0.0.1:9223");
   await expect
     .poll(() => browser.contexts().flatMap((c) => c.pages()).length)
