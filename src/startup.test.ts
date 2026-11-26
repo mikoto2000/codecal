@@ -7,7 +7,11 @@ function start() {
   document.body.innerHTML = parsed.body.innerHTML;
   const fakeWindow = {
     __CODECAL_STARTUP__: undefined as Window["__CODECAL_STARTUP__"],
-    __TAURI_INTERNALS__: { invoke: vi.fn().mockResolvedValue(123) },
+    __TAURI_INTERNALS__: {
+      invoke: vi
+        .fn()
+        .mockResolvedValue({ native_shell_ms: 123, native_splash_ms: 12 }),
+    },
     location: { reload: vi.fn() },
     ErrorEvent: window.ErrorEvent,
     addEventListener: window.addEventListener.bind(window),
@@ -38,6 +42,7 @@ it("has an HTML spinner before any module executes and presents without database
   );
   await Promise.resolve();
   expect(host.__CODECAL_STARTUP__!.timings.native_shell_ms).toBe(123);
+  expect(host.__CODECAL_STARTUP__!.timings.native_splash_ms).toBe(12);
 });
 it("keeps progress and offers reload when module loading is slow", () => {
   vi.advanceTimersByTime(15000);
@@ -48,10 +53,10 @@ it("keeps progress and offers reload when module loading is slow", () => {
   document.getElementById("boot-reload")!.click();
   expect(host.location.reload).toHaveBeenCalledOnce();
 });
-it("shows an actionable error if the module fails", () => {
-  document
-    .getElementById("app-module")!
-    .dispatchEvent(new Event("error", { bubbles: true }));
+it("shows an actionable error when the production module without an id fails", () => {
+  const module = document.getElementById("app-module")!;
+  module.removeAttribute("id");
+  module.dispatchEvent(new Event("error", { bubbles: true }));
   expect(document.getElementById("boot-error")).toHaveTextContent(
     "画面を読み込めませんでした",
   );

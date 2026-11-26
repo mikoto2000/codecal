@@ -16,7 +16,10 @@
     reload.hidden = false;
   };
   const onError = (event) => {
-    if (event.target?.id === "app-module" || event instanceof window.ErrorEvent)
+    if (
+      (event.target?.tagName === "SCRIPT" && event.target.type === "module") ||
+      event instanceof window.ErrorEvent
+    )
       failed();
   };
   const slow = window.setTimeout(() => {
@@ -46,8 +49,10 @@
   // No React, database, source scan, or module import is required to show it.
   window.__TAURI_INTERNALS__
     ?.invoke("show_startup")
-    .then((ms) => {
-      timings.native_shell_ms = ms;
+    .then((presentation) => {
+      timings.native_shell_ms = presentation.native_shell_ms;
+      if (presentation.native_splash_ms != null)
+        timings.native_splash_ms = presentation.native_splash_ms;
     })
     .catch(failed);
 })();
