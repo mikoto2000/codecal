@@ -70,6 +70,10 @@ export type HumanActivityDiagnostic = {
   count: number;
 };
 export type HumanActivityResponse = {
+  bins?: (Omit<import("./human-time-bands").HumanTimeBin, "top" | "height"> & {
+    day_start: number;
+    day_end: number;
+  })[];
   records: HumanActivity[];
   diagnostics: HumanActivityDiagnostic[];
 };

@@ -244,7 +244,7 @@ it("opens human-only monthly day details with a separate AI list and a zero-seco
     turns: [],
   });
   render(<App initialDate="2026-11-20" />);
-  await screen.findByRole("button", { name: /^人間 娯楽 / });
+  await screen.findAllByRole("button", { name: /^人間 娯楽 / });
   fireEvent.click(screen.getByRole("button", { name: "月" }));
   const cell = await screen.findByRole("button", { name: /^2026-11-20 / });
   await act(async () => {});
@@ -384,7 +384,9 @@ it("keeps independent filter hours and targets bulk operations to their own list
   });
   fireEvent.click(project);
   expect(within(project.closest("label")!).getByText("2h 0m")).toBeVisible();
-  expect(screen.getByRole("button", { name: /^人間 非娯楽 / })).toBeVisible();
+  expect(
+    screen.getAllByRole("button", { name: /^人間 非娯楽 / })[0],
+  ).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "人間の種別をすべてON" }));
   expect(humanCheckbox).toBeChecked();
   expect(project).not.toBeChecked();
@@ -413,7 +415,7 @@ it("shows human-only records with zero projects and preserves filters through vi
     screen.getByRole("button", { name: "プロジェクトをすべてON" }),
   ).toBeDisabled();
   expect(
-    await screen.findByRole("button", { name: /^人間 娯楽 / }),
+    (await screen.findAllByRole("button", { name: /^人間 娯楽 / }))[0],
   ).toBeVisible();
   fireEvent.click(screen.getByRole("checkbox", { name: "人間の娯楽を表示" }));
   fireEvent.click(screen.getByRole("button", { name: "日" }));
@@ -429,6 +431,56 @@ it("shows human-only records with zero projects and preserves filters through vi
     screen.getByRole("checkbox", { name: "人間の娯楽を表示" }),
   ).not.toBeChecked();
 });
+it("uses bounded bins for day and week and keeps AI display controls independent", async () => {
+  await withHuman();
+  const start = Date.parse("2026-11-20T10:00Z"),
+    midnight = Date.parse("2026-11-20T00:00Z");
+  vi.mocked(api.humanActivity).mockResolvedValue({
+    records: [],
+    diagnostics: [],
+    bins: [
+      {
+        date: "2026-11-20",
+        start,
+        end: start + 300000,
+        day_start: midnight,
+        day_end: midnight + 86400000,
+        total_ms: 90000,
+        kinds: { entertainment: 60000, non_entertainment: 30000, unknown: 0 },
+        points: {
+          entertainment: false,
+          non_entertainment: false,
+          unknown: false,
+        },
+      },
+    ],
+  });
+  await mount();
+  const cell = await screen.findByRole("button", { name: /^人間 娯楽 / });
+  expect(cell).toHaveStyle({ height: "5px" });
+  expect(document.querySelectorAll(".human-time-lane")).toHaveLength(21);
+  expect(api.humanActivity).toHaveBeenLastCalledWith(
+    expect.any(Number),
+    expect.any(Number),
+    true,
+    "UTC",
+    true,
+  );
+  fireEvent.change(screen.getByLabelText("ブロックの表示単位"), {
+    target: { value: "turn" },
+  });
+  expect(api.humanActivity).toHaveBeenCalledTimes(1);
+  fireEvent.click(cell);
+  expect(screen.getByRole("dialog")).toHaveTextContent("1m");
+  fireEvent.click(screen.getByRole("button", { name: "閉じる" }));
+  fireEvent.click(screen.getByRole("button", { name: "日" }));
+  await waitFor(() =>
+    expect(document.querySelectorAll(".human-time-lane")).toHaveLength(3),
+  );
+  expect(
+    await screen.findByRole("button", { name: /^人間 娯楽 / }),
+  ).toHaveStyle({ height: "5px" });
+});
 it("limits human detail fields and closes it permanently after the feature is disabled", async () => {
   const marker = "PRIVATE_RENDER_MARKER";
   const record = {
@@ -440,13 +492,15 @@ it("limits human detail fields and closes it permanently after the feature is di
   } as HumanActivity;
   await withHuman([record]);
   await mount();
-  const block = await screen.findByRole("button", { name: /^人間 娯楽 / });
+  const block = (
+    await screen.findAllByRole("button", { name: /^人間 娯楽 / })
+  )[0];
   expect(block.getAttribute("title")).not.toContain(marker);
   fireEvent.click(block);
   const detail = screen.getByRole("dialog", {
     name: "人間のアクティビティ（推定）",
   });
-  expect(detail).toHaveTextContent("推定終了時刻");
+  expect(detail).toHaveTextContent("時間帯の終了");
   expect(detail).toHaveTextContent("Rei の観測に基づく推定");
   expect(detail).not.toHaveTextContent(marker);
   expect(
@@ -468,7 +522,7 @@ it("limits human detail fields and closes it permanently after the feature is di
     screen.getByLabelText("人間のアクティビティ機能を有効にする"),
   );
   fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
-  await screen.findByRole("button", { name: /^人間 娯楽 / });
+  await screen.findAllByRole("button", { name: /^人間 娯楽 / });
   expect(
     screen.queryByRole("dialog", { name: "人間のアクティビティ（推定）" }),
   ).not.toBeInTheDocument();

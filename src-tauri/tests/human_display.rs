@@ -230,3 +230,46 @@ fn bulk_initial_import_keeps_reverse_id_ties_points_long_estimates_and_late_old_
             && d.count == 1));
     }
 }
+
+#[test]
+fn alternating_dense_observations_use_bounded_bins_without_raw_wire_fields() {
+    let records = (0..50_001)
+        .map(|i| {
+            (
+                i * 1000,
+                1,
+                if i % 2 == 0 {
+                    "ENTERTAINMENT"
+                } else {
+                    "NON_ENTERTAINMENT"
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    let (_tmp, store, id) = cache(&records);
+    assert_eq!(
+        store
+            .human_activity_display(&id, 0, 86400000, "UTC", true)
+            .unwrap_err()
+            .to_string(),
+        "period_too_dense"
+    );
+    let response = store.human_activity_bands(&id, 0, 86400000, "UTC").unwrap();
+    assert!(response.records.is_empty());
+    let bins = response.bins.as_ref().unwrap();
+    assert_eq!(bins.len(), 167);
+    assert_eq!(bins.iter().map(|b| b.total_ms).sum::<i64>(), 50_001_000);
+    assert_eq!(bins[0].kinds[&HumanKind::Entertainment], 150000);
+    assert_eq!(bins[0].kinds[&HumanKind::NonEntertainment], 150000);
+    let wire = serde_json::to_string(&response).unwrap();
+    for forbidden in [
+        "PRIVATE_DISPLAY_MARKER",
+        "synthetic-",
+        "source_id",
+        "payload",
+        "content_hash",
+    ] {
+        assert!(!wire.contains(forbidden));
+    }
+    assert!(wire.len() < 100000);
+}

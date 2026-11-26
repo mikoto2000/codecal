@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useId,
@@ -15,13 +16,14 @@ import { api } from "./api";
 import { useHumanActivity } from "./useHumanActivity";
 import { useHumanSummary } from "./useHumanSummary";
 import { HumanTotals } from "./HumanTotals";
+import { HumanTimeBands } from "./HumanTimeBands";
+import { buildHumanTimeBins, type HumanTimeBin } from "./human-time-bands";
 import { HumanDayBars } from "./HumanDayBars";
 import { HumanDayList } from "./HumanDayList";
 import {
   humanKinds,
   humanLabels,
   humanColors,
-  indexHumanActivity,
   type HumanSegment,
 } from "./human-calendar";
 import { useTimelineZoom } from "./useTimelineZoom";
@@ -48,8 +50,6 @@ import type {
   Turn,
   HumanActivityKind,
 } from "./types";
-type DisplayBlock =
-  (ActivityGroup & { layer: "ai" }) | (HumanSegment & { layer: "human" });
 const sourceLabel = (turn: Turn) =>
   turn.source === "claude"
     ? "Claude Code"
@@ -185,10 +185,14 @@ export default function App({ initialDate }: { initialDate?: string }) {
     new Set(),
   );
   const [grouping, setGrouping] = useState<GroupingMode>("group");
-  const [selectedHuman, setSelectedHuman] = useState<{
-    context: string;
-    segment: HumanSegment;
-  } | null>(null);
+  const [selectedHuman, setSelectedHuman] = useState<
+    | {
+        context: string;
+        segment: HumanSegment;
+      }
+    | { context: string; bin: HumanTimeBin }
+    | null
+  >(null);
   const {
     viewportRef: timelineViewportRef,
     scale: timelineScale,
@@ -348,7 +352,8 @@ export default function App({ initialDate }: { initialDate?: string }) {
     from: humanFrom,
     to: humanTo,
     zone,
-    grouped: view !== "month" && grouping === "group",
+    grouped: true,
+    binned: true,
   });
   const visibleHumanKinds = humanKinds.filter((kind) => !hiddenHuman.has(kind));
   const humanSummary = useHumanSummary({
@@ -364,10 +369,26 @@ export default function App({ initialDate }: { initialDate?: string }) {
     view === "month"
       ? days.filter((d) => d.slice(0, 7) === anchor.slice(0, 7))
       : days;
-  const humanIndex = useMemo(
-    () => indexHumanActivity(human.records, days, zone),
-    [human.records, days, zone],
-  );
+  const humanBins = useMemo(() => {
+    if (!human.bins)
+      return buildHumanTimeBins(
+        human.records,
+        view === "month" ? [] : days,
+        zone,
+      );
+    const index = new Map<string, HumanTimeBin[]>();
+    for (const bin of human.bins) {
+      const values = index.get(bin.date) ?? [];
+      values.push({
+        ...bin,
+        top:
+          ((bin.start - bin.day_start) / (bin.day_end - bin.day_start)) * 1440,
+        height: ((bin.end - bin.start) / (bin.day_end - bin.day_start)) * 1440,
+      });
+      index.set(bin.date, values);
+    }
+    return index;
+  }, [human.bins, human.records, days, zone, view]);
   const humanHours = useMemo(
     () =>
       Object.fromEntries(
@@ -390,12 +411,10 @@ export default function App({ initialDate }: { initialDate?: string }) {
   const humanHoursUnavailable =
     !!humanSummary.error ||
     (humanSummary.loading && humanSummary.unfilteredDays.length === 0);
-  const humanSegments = useMemo(
-    () =>
-      days
-        .flatMap((date) => humanIndex.get(date)?.segments ?? [])
-        .filter((segment) => !hiddenHuman.has(segment.kind)),
-    [humanIndex, days, hiddenHuman],
+  const hasHumanBins = [...humanBins.values()].some((bins) =>
+    bins.some((bin) =>
+      visibleHumanKinds.some((k) => bin.kinds[k] > 0 || bin.points[k]),
+    ),
   );
   const allActivity = useMemo(
     () => indexActivity(data.turns, zone),
@@ -932,36 +951,38 @@ export default function App({ initialDate }: { initialDate?: string }) {
             </button>
           </section>
         )}
-        <section className="summary-cards" aria-label="表示期間の集計">
-          <div>
-            <span>実稼働時間帯</span>
-            <strong data-testid="total-elapsed">
-              {formatDuration(summary.elapsed_ms)}
-            </strong>
-            <small>重複を除いた時間</small>
-          </div>
-          <div>
-            <span>延べ稼働時間</span>
-            <strong>{formatDuration(summary.total_ms)}</strong>
-            <small>すべてのターンの合計</small>
-          </div>
-          <div>
-            <span>アクティブプロジェクト</span>
-            <strong>
-              {Object.keys(summary.projects).length}
-              <em> projects</em>
-            </strong>
-            <small>表示期間内のプロジェクト</small>
-          </div>
-          <div>
-            <span>実行ターン</span>
-            <strong>
-              {summary.count}
-              <em> turns</em>
-            </strong>
-            <small>終了不明のターンも含む</small>
-          </div>
-        </section>
+        {(filtered.length > 0 || !config.human_activity_enabled) && (
+          <section className="summary-cards" aria-label="表示期間の集計">
+            <div>
+              <span>実稼働時間帯</span>
+              <strong data-testid="total-elapsed">
+                {formatDuration(summary.elapsed_ms)}
+              </strong>
+              <small>重複を除いた時間</small>
+            </div>
+            <div>
+              <span>延べ稼働時間</span>
+              <strong>{formatDuration(summary.total_ms)}</strong>
+              <small>すべてのターンの合計</small>
+            </div>
+            <div>
+              <span>アクティブプロジェクト</span>
+              <strong>
+                {Object.keys(summary.projects).length}
+                <em> projects</em>
+              </strong>
+              <small>表示期間内のプロジェクト</small>
+            </div>
+            <div>
+              <span>実行ターン</span>
+              <strong>
+                {summary.count}
+                <em> turns</em>
+              </strong>
+              <small>終了不明のターンも含む</small>
+            </div>
+          </section>
+        )}
         {config.human_activity_enabled && (
           <HumanTotals
             days={humanSummary.days}
@@ -1034,7 +1055,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
             summary.count === 0 &&
             (view === "month"
               ? humanVisibleDates.length === 0
-              : humanSegments.length === 0) && (
+              : !hasHumanBins) && (
               <div className="empty-state">
                 {data.turns.length === 0 &&
                 humanSummary.unfilteredDays.length === 0 ? (
@@ -1094,8 +1115,13 @@ export default function App({ initialDate }: { initialDate?: string }) {
                 </label>
                 {grouping === "group" && (
                   <span className="grouping-hint">
-                    AI: 同じプロジェクト・間隔5分以内 / 人間:
-                    同じ種別・端点の接続
+                    AI: 同じプロジェクト・間隔5分以内
+                  </span>
+                )}
+                {config.human_activity_enabled && (
+                  <span className="grouping-hint">
+                    人間:
+                    固定3列・5分集約（濃いほど推定時間が長い／点線は0秒の観測）
                   </span>
                 )}
                 <div className="timeline-zoom-controls">
@@ -1132,6 +1158,24 @@ export default function App({ initialDate }: { initialDate?: string }) {
                       {DateTime.fromISO(d).setLocale("ja").toFormat("ccc")}
                     </span>
                     <strong>{Number(d.slice(-2))}</strong>
+                    {config.human_activity_enabled &&
+                      visibleHumanKinds.length > 0 && (
+                        <div
+                          className="human-column-labels"
+                          style={{
+                            width:
+                              groups.length > 0 ? "min(38%, 120px)" : "100%",
+                            alignSelf: "flex-start",
+                          }}
+                          aria-label="人間の列順: 娯楽・非娯楽・不明"
+                        >
+                          {humanKinds.map((kind) => (
+                            <span key={kind} title={humanLabels[kind]}>
+                              {humanLabels[kind]}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                   </div>
                 ))}
               </div>
@@ -1160,7 +1204,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
                     const dst = length !== 86400000;
                     return (
                       <div
-                        className={`day-column ${dst ? "dst-day" : ""}`}
+                        className={`day-column ${dst ? "dst-day" : ""} ${config.human_activity_enabled && visibleHumanKinds.length > 0 ? "with-human-bands" : ""} ${groups.length > 0 ? "with-ai" : ""}`}
                         key={d}
                         aria-label={d}
                       >
@@ -1197,128 +1241,98 @@ export default function App({ initialDate }: { initialDate?: string }) {
                             <span />
                           </div>
                         )}
-                        {packSegments<DisplayBlock>([
-                          ...groups
-                            .filter((g) => g.date === d)
-                            .map((g) => ({
-                              ...g,
-                              layer: "ai" as const,
-                              top: g.top * timelineScale,
-                              height: g.unknown
-                                ? 22
-                                : Math.max(10, g.height * timelineScale),
-                            })),
-                          ...humanSegments
-                            .filter((h) => h.date === d)
-                            .map((h) => ({
-                              ...h,
-                              layer: "human" as const,
-                              top: Math.min(
-                                h.top * timelineScale,
-                                1440 * timelineScale - (h.point ? 12 : 2),
+                        {config.human_activity_enabled &&
+                          visibleHumanKinds.length > 0 && (
+                            <HumanTimeBands
+                              bins={humanBins.get(d) ?? []}
+                              visible={visibleHumanKinds}
+                              scale={timelineScale}
+                              zone={zone}
+                              open={(bin) => {
+                                setSelectedHuman({
+                                  context: humanContext,
+                                  bin,
+                                });
+                                setSelected(null);
+                                setSelectedGroup(null);
+                                setSelectedDay(null);
+                                setReturnGroup(null);
+                              }}
+                            />
+                          )}
+                        <div className="ai-time-blocks">
+                          {packSegments(
+                            groups
+                              .filter((g) => g.date === d)
+                              .map((g) => ({
+                                ...g,
+                                top: g.top * timelineScale,
+                                height: g.unknown
+                                  ? 22
+                                  : Math.max(10, g.height * timelineScale),
+                              })),
+                          ).map((g) => {
+                            const p = projects.get(g.project_id);
+                            const sources = [
+                              ...new Set(
+                                g.members.map((m) => sourceLabel(m.turn)),
                               ),
-                              height: h.point
-                                ? 12
-                                : Math.max(2, h.height * timelineScale),
-                            })),
-                        ]).map((item) => {
-                          if (item.layer === "human") {
-                            const h = item;
-                            const times = `${localDate(h.start, zone).toFormat("HH:mm:ss")} – ${localDate(h.end, zone).toFormat(h.end === next.toMillis() ? "'24:00:00'" : "HH:mm:ss")}`;
-                            const label = `人間 ${humanLabels[h.kind]} ${times}${h.point ? " 点の観測" : " 推定区間"}`;
+                            ].join(" / ");
+                            const multiple = g.members.length > 1;
+                            const states = Object.entries(g.statuses)
+                              .map(
+                                ([status, count]) =>
+                                  `${statusLabel[status as Turn["status"]]}${multiple ? ` ${count}` : ""}`,
+                              )
+                              .join(" · ");
+                            const times = `${localDate(g.start, zone).toFormat("HH:mm")} – ${g.unknown ? "?" : localDate(g.end!, zone).toFormat(g.end === next.toMillis() ? "'24:00'" : "HH:mm")}`;
+                            const details = multiple
+                              ? `${g.members.length}ターン · 実稼働 ${formatDuration(g.elapsed_ms)} · ${states}`
+                              : states;
+                            const prompt =
+                              g.members.find((m) => m.turn.prompt)?.turn
+                                .prompt ?? "";
                             return (
                               <button
-                                key={h.id}
-                                className={`activity-block human-block ${h.point ? "point" : ""} ${h.height < 24 ? "compact" : ""}`}
-                                aria-label={label}
-                                title={label}
-                                style={
-                                  {
-                                    top: h.top,
-                                    height: h.height,
-                                    left: `calc(${(h.lane / h.lanes) * 100}% + 3px)`,
-                                    width: `calc(${100 / h.lanes}% - 6px)`,
-                                    "--human-color": humanColors[h.kind],
-                                  } as CSSProperties
-                                }
-                                onClick={() => {
-                                  setSelectedHuman({
-                                    context: humanContext,
-                                    segment: h,
-                                  });
-                                  setSelected(null);
-                                  setSelectedGroup(null);
-                                  setSelectedDay(null);
-                                  setReturnGroup(null);
+                                key={g.id}
+                                className={`activity-block ${g.unknown ? "unknown" : ""} ${multiple ? "grouped" : ""}`}
+                                data-turn-count={g.members.length}
+                                aria-label={`${p?.name} ${times} ${details} · ${sources}`}
+                                title={`${p?.name} · ${sources}\n${times}\n${details}\n${prompt.slice(0, 240)}`}
+                                style={{
+                                  top: g.top,
+                                  height: g.height,
+                                  left: `calc(${(g.lane / g.lanes) * 100}% + 3px)`,
+                                  width: `calc(${100 / g.lanes}% - 6px)`,
+                                  borderColor: p?.color,
+                                  background: `${p?.color ?? "#14b8a6"}26`,
                                 }}
+                                onClick={() => openGroup(g)}
                               >
                                 <strong>
-                                  人間 · {humanLabels[h.kind]}
-                                  {h.point && " · 点"}
+                                  {p?.name ?? "Unknown"}
+                                  <small> · {sources}</small>
+                                  {multiple && ` · ${g.members.length}ターン`}
                                 </strong>
-                                {!h.point && <span>{times} · 推定</span>}
+                                <span>
+                                  {times}
+                                  {!multiple && ` · ${states}`}
+                                </span>
+                                {multiple && g.height > 42 && (
+                                  <span>
+                                    実稼働 {formatDuration(g.elapsed_ms)} ·{" "}
+                                    {states}
+                                  </span>
+                                )}
+                                {g.height > (multiple ? 85 : 60) && (
+                                  <p>
+                                    {prompt.slice(0, 160) || "依頼内容なし"}
+                                  </p>
+                                )}
                               </button>
                             );
-                          }
-                          const g = item;
-                          const p = projects.get(g.project_id);
-                          const sources = [
-                            ...new Set(
-                              g.members.map((m) => sourceLabel(m.turn)),
-                            ),
-                          ].join(" / ");
-                          const multiple = g.members.length > 1;
-                          const states = Object.entries(g.statuses)
-                            .map(
-                              ([status, count]) =>
-                                `${statusLabel[status as Turn["status"]]}${multiple ? ` ${count}` : ""}`,
-                            )
-                            .join(" · ");
-                          const times = `${localDate(g.start, zone).toFormat("HH:mm")} – ${g.unknown ? "?" : localDate(g.end!, zone).toFormat(g.end === next.toMillis() ? "'24:00'" : "HH:mm")}`;
-                          const details = multiple
-                            ? `${g.members.length}ターン · 実稼働 ${formatDuration(g.elapsed_ms)} · ${states}`
-                            : states;
-                          const prompt =
-                            g.members.find((m) => m.turn.prompt)?.turn.prompt ??
-                            "";
-                          return (
-                            <button
-                              key={g.id}
-                              className={`activity-block ${g.unknown ? "unknown" : ""} ${multiple ? "grouped" : ""}`}
-                              data-turn-count={g.members.length}
-                              aria-label={`${p?.name} ${times} ${details} · ${sources}`}
-                              title={`${p?.name} · ${sources}\n${times}\n${details}\n${prompt.slice(0, 240)}`}
-                              style={{
-                                top: g.top,
-                                height: g.height,
-                                left: `calc(${(g.lane / g.lanes) * 100}% + 3px)`,
-                                width: `calc(${100 / g.lanes}% - 6px)`,
-                                borderColor: p?.color,
-                                background: `${p?.color ?? "#14b8a6"}26`,
-                              }}
-                              onClick={() => openGroup(g)}
-                            >
-                              <strong>
-                                {p?.name ?? "Unknown"}
-                                <small> · {sources}</small>
-                                {multiple && ` · ${g.members.length}ターン`}
-                              </strong>
-                              <span>
-                                {times}
-                                {!multiple && ` · ${states}`}
-                              </span>
-                              {multiple && g.height > 42 && (
-                                <span>
-                                  実稼働 {formatDuration(g.elapsed_ms)} ·{" "}
-                                  {states}
-                                </span>
-                              )}
-                              {g.height > (multiple ? 85 : 60) && (
-                                <p>{prompt.slice(0, 160) || "依頼内容なし"}</p>
-                              )}
-                            </button>
-                          );
-                        })}
+                          })}
+                        </div>
                       </div>
                     );
                   })}
@@ -1452,34 +1466,71 @@ export default function App({ initialDate }: { initialDate?: string }) {
             title="人間のアクティビティ（推定）"
             close={() => setSelectedHuman(null)}
           >
-            <dl className="details">
-              <dt>種別</dt>
-              <dd>{humanLabels[selectedHuman.segment.kind]}</dd>
-              <dt>日付</dt>
-              <dd>{selectedHuman.segment.date}</dd>
-              <dt>開始時刻</dt>
-              <dd>{dateText(selectedHuman.segment.start)}</dd>
-              <dt>推定終了時刻</dt>
-              <dd>{dateText(selectedHuman.segment.end)}</dd>
-              <dt>推定継続時間</dt>
-              <dd>
-                {formatDuration(
-                  selectedHuman.segment.end - selectedHuman.segment.start,
-                )}{" "}
-                {(
-                  ((selectedHuman.segment.end - selectedHuman.segment.start) %
-                    60000) /
-                  1000
-                ).toFixed(3)}
-                s
-              </dd>
-            </dl>
-            <p className="hint">
-              Rei
-              の観測に基づく推定区間です。日付境界と表示範囲で分割して表示しています。
-              {selectedHuman.segment.point &&
-                "0秒の点の観測であり、時間の集計には含めません。"}
-            </p>
+            {"bin" in selectedHuman ? (
+              <>
+                <dl className="details">
+                  <dt>日付</dt>
+                  <dd>{selectedHuman.bin.date}</dd>
+                  <dt>時間帯の開始</dt>
+                  <dd>{dateText(selectedHuman.bin.start)}</dd>
+                  <dt>時間帯の終了</dt>
+                  <dd>{dateText(selectedHuman.bin.end)}（集約枠の末尾）</dd>
+                  <dt>全種別の推定時間（重複を除く）</dt>
+                  <dd>{formatDuration(selectedHuman.bin.total_ms)}</dd>
+                  {visibleHumanKinds.map((kind) => (
+                    <Fragment key={kind}>
+                      <dt>{humanLabels[kind]}</dt>
+                      <dd>
+                        {formatDuration(selectedHuman.bin.kinds[kind])}{" "}
+                        {(
+                          (selectedHuman.bin.kinds[kind] % 60000) /
+                          1000
+                        ).toFixed(3)}
+                        s
+                        {selectedHuman.bin.points[kind] &&
+                          " · 0秒の点の観測を含む"}
+                      </dd>
+                    </Fragment>
+                  ))}
+                </dl>
+                <p className="hint">
+                  Rei
+                  の観測に基づく推定時間です。5分枠内の各種別の重複を除いて集計し、未観測の空白は含みません。種別間の時間は重なる場合があります。0秒の観測は時間の集計には含めません。
+                </p>
+              </>
+            ) : (
+              <>
+                <dl className="details">
+                  <dt>種別</dt>
+                  <dd>{humanLabels[selectedHuman.segment.kind]}</dd>
+                  <dt>日付</dt>
+                  <dd>{selectedHuman.segment.date}</dd>
+                  <dt>開始時刻</dt>
+                  <dd>{dateText(selectedHuman.segment.start)}</dd>
+                  <dt>推定終了時刻</dt>
+                  <dd>{dateText(selectedHuman.segment.end)}</dd>
+                  <dt>推定継続時間</dt>
+                  <dd>
+                    {formatDuration(
+                      selectedHuman.segment.end - selectedHuman.segment.start,
+                    )}{" "}
+                    {(
+                      ((selectedHuman.segment.end -
+                        selectedHuman.segment.start) %
+                        60000) /
+                      1000
+                    ).toFixed(3)}
+                    s
+                  </dd>
+                </dl>
+                <p className="hint">
+                  Rei
+                  の観測に基づく推定区間です。日付境界と表示範囲で分割して表示しています。
+                  {selectedHuman.segment.point &&
+                    "0秒の点の観測であり、時間の集計には含めません。"}
+                </p>
+              </>
+            )}
           </Modal>
         )}
       {selectedGroup && (

@@ -512,18 +512,23 @@ pub async fn human_activity(
     from: i64,
     to: i64,
     grouped: Option<bool>,
+    binned: Option<bool>,
     timezone: Option<String>,
 ) -> Result<crate::rei_human::HumanActivityResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        app.try_state::<AppState>()
-            .ok_or("human_not_ready")?
-            .human
-            .period_display(
+        let state = app.try_state::<AppState>().ok_or("human_not_ready")?;
+        if binned.unwrap_or(false) {
+            state
+                .human
+                .period_bands(from, to, timezone.as_deref().unwrap_or("UTC"))
+        } else {
+            state.human.period_display(
                 from,
                 to,
                 timezone.as_deref().unwrap_or("UTC"),
                 grouped.unwrap_or(false),
             )
+        }
     })
     .await
     .map_err(|_| "human_request_failed")?

@@ -181,7 +181,8 @@ test("human settings: legacy memory database, isolated IPC, WAL updates, OFF res
     try {
       await ipc("sync_logs");
       await page.getByLabel("表示日").fill("2026-11-20");
-      await expect(page.locator(".human-block")).toHaveCount(3);
+      await expect(page.locator(".human-block")).toHaveCount(4);
+      await expect(page.locator(".human-time-lane")).toHaveCount(21);
       const ai = page.getByRole("button", { name: /^AI overlap 10:00/ });
       const entertainment = page.getByRole("button", { name: /^人間 娯楽 / });
       await expect(ai).toBeVisible();
@@ -207,7 +208,7 @@ test("human settings: legacy memory database, isolated IPC, WAL updates, OFF res
       const detail = page.getByRole("dialog", {
         name: "人間のアクティビティ（推定）",
       });
-      await expect(detail).toContainText("推定終了時刻");
+      await expect(detail).toContainText("時間帯の終了");
       await expect(detail).not.toContainText(marker);
       await expect(detail).not.toContainText(humanRoot);
       await expect(
@@ -230,7 +231,7 @@ test("human settings: legacy memory database, isolated IPC, WAL updates, OFF res
       await page.getByLabel("ブロックの表示単位").selectOption("turn");
       await expect(
         page.getByRole("button", { name: /^人間 娯楽 / }),
-      ).toHaveCount(2);
+      ).toHaveCount(1);
       await page.getByRole("button", { name: /^AI overlap 10:04/ }).click();
       await expect(page.getByRole("dialog")).toContainText(
         "synthetic short AI overlap",
@@ -277,6 +278,17 @@ test("human settings: legacy memory database, isolated IPC, WAL updates, OFF res
       await page
         .getByRole("button", { name: "人間の種別をすべてON", exact: true })
         .click();
+      await page.getByRole("button", { name: "日", exact: true }).click();
+      await expect(page.locator(".human-time-lane")).toHaveCount(3);
+      const dayCell = page.getByRole("button", { name: /^人間 娯楽 / });
+      await dayCell.scrollIntoViewIfNeeded();
+      await dayCell.focus();
+      await page.keyboard.press("Enter");
+      await expect(page.getByRole("dialog")).toContainText("集約枠の末尾");
+      await page.keyboard.press("Escape");
+      await page.screenshot({ path: "test-results/human-bands-day.png" });
+      await page.getByRole("button", { name: "週", exact: true }).click();
+      await expect(page.locator(".human-time-lane")).toHaveCount(21);
       for (const theme of ["light", "dark"]) {
         await page.getByRole("button", { name: "設定", exact: true }).click();
         await page.getByLabel("テーマ", { exact: true }).selectOption(theme);
@@ -972,9 +984,13 @@ test("human performance: native synchronization keeps navigation responsive with
       { captured, marker },
     );
     await page.getByRole("button", { name: "日", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "日", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
     await page.getByLabel("表示日").fill("2026-11-01");
-    await expect(page.locator(".human-block")).toHaveCount(1);
-    await page.locator(".human-block").click();
+    await expect(page.locator(".human-time-lane")).toHaveCount(3);
+    expect(await page.locator(".human-block").count()).toBeLessThanOrEqual(864);
+    await page.locator(".human-block").first().click();
     await expect(
       page.getByRole("dialog", { name: "人間のアクティビティ（推定）" }),
     ).not.toContainText(marker);
@@ -1874,6 +1890,108 @@ test("corrupt settings recover with a persistent backup and dialogs restore focu
     await expect(
       page.getByText(/保存済みの設定を読み込めなかったため/),
     ).toHaveCount(0);
+  } finally {
+    await stop();
+  }
+});
+
+test("human bands: dense day/week lanes, duration coverage and keyboard details", async () => {
+  test.setTimeout(120000);
+  mkdirSync(path.join(logs, "sessions"), { recursive: true });
+  const humanRoot = path.join(root, "dense-bands");
+  mkdirSync(humanRoot, { recursive: true });
+  const db = new DatabaseSync(path.join(humanRoot, "storage.db"));
+  const captured = Date.parse("2026-11-19T15:00Z");
+  db.exec(
+    "CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT)",
+  );
+  db.prepare(
+    `WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i<60000)
+    INSERT INTO activity_records SELECT 'synthetic-dense-'||i,?+i*500,
+    json_object('durationEstimate',1,'foreground',json_object('title','PRIVATE_DENSE_BANDS'),
+    'detection',json_object('diagnostics',json_object('entertainmentDisposition',
+    CASE WHEN i%10<6 THEN 'UNCERTAIN' WHEN i%10<9 THEN 'ENTERTAINMENT' ELSE 'NON_ENTERTAINMENT' END))) FROM n`,
+  ).run(captured);
+  db.close();
+  try {
+    await launch();
+    const guide = page.getByRole("button", {
+      name: "案内を閉じる",
+      exact: true,
+    });
+    if (await guide.count()) await guide.click();
+    await page.getByRole("button", { name: "設定", exact: true }).click();
+    await page.getByLabel("れいの AI 実行履歴を取り込む").uncheck();
+    await page.getByLabel("Claude Code の履歴を取り込む").uncheck();
+    await page.getByLabel("人間のアクティビティ機能を有効にする").check();
+    await page.getByLabel("れい データディレクトリ").fill(humanRoot);
+    await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+    await expect(
+      page.getByRole("dialog", { name: "設定", exact: true }),
+    ).toHaveCount(0);
+    await page.getByRole("button", { name: "日", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "日", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await page.getByLabel("表示日").fill("2026-11-20");
+    const allOff = page.getByRole("button", {
+      name: "プロジェクトをすべてOFF",
+      exact: true,
+    });
+    if (await allOff.count()) await allOff.click();
+    const allHumanOn = page.getByRole("button", {
+      name: "人間の種別をすべてON",
+      exact: true,
+    });
+    if (await allHumanOn.count()) await allHumanOn.click();
+    await expect(page.locator(".human-time-cell")).toHaveCount(301, {
+      timeout: 40000,
+    });
+    await expect(page.locator(".human-time-lane")).toHaveCount(3);
+    await expect(
+      page.getByRole("region", { name: "表示期間の集計" }),
+    ).toHaveCount(0);
+    const first = page
+      .locator('.human-time-lane[data-kind="entertainment"] button')
+      .first();
+    expect(
+      await first.evaluate((el) =>
+        (el as HTMLElement).style.getPropertyValue("--coverage"),
+      ),
+    ).toBe("30%");
+    await first.scrollIntoViewIfNeeded();
+    await first.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("dialog")).toContainText("5分枠");
+    await expect(page.getByRole("dialog")).not.toContainText(
+      "PRIVATE_DENSE_BANDS",
+    );
+    await page.keyboard.press("Escape");
+    const labels = await page
+      .locator(".human-time-cell")
+      .evaluateAll((els) => els.map((el) => el.getAttribute("aria-label")));
+    await page.screenshot({ path: "test-results/human-bands-dense-day.png" });
+    await page.getByRole("button", { name: "週", exact: true }).click();
+    await expect(page.locator(".human-time-lane")).toHaveCount(21);
+    await expect(page.locator(".human-time-cell")).toHaveCount(301);
+    expect(
+      await page
+        .locator(".human-time-cell")
+        .evaluateAll((els) => els.map((el) => el.getAttribute("aria-label"))),
+    ).toEqual(labels);
+    await page.screenshot({ path: "test-results/human-bands-dense-week.png" });
+    const unknown = page.getByRole("checkbox", {
+      name: "人間の不明を表示",
+      exact: true,
+    });
+    await unknown.uncheck();
+    await expect(page.locator(".human-time-lane")).toHaveCount(21);
+    await expect(
+      page.locator('.human-time-lane[data-kind="unknown"] button'),
+    ).toHaveCount(0);
+    await page.getByRole("button", { name: "設定", exact: true }).click();
+    await page.getByLabel("人間のアクティビティ機能を有効にする").uncheck();
+    await page.getByRole("button", { name: "設定を保存", exact: true }).click();
   } finally {
     await stop();
   }

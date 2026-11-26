@@ -327,6 +327,35 @@ impl HumanRuntime {
         }
         .map_err(|e| e.to_string())
     }
+    pub fn period_bands(
+        &self,
+        from: i64,
+        to: i64,
+        timezone: &str,
+    ) -> Result<HumanActivityResponse, String> {
+        let _gate = lock(&self.shared.gate);
+        let control = lock(&self.shared.control);
+        if !control.preferences.enabled {
+            return Err("human_activity_disabled".into());
+        }
+        crate::rei_human::validate_period(from, to).map_err(|e| e.to_string())?;
+        timezone
+            .parse::<chrono_tz::Tz>()
+            .map_err(|_| "invalid_timezone")?;
+        let root = control.preferences.root.clone();
+        drop(control);
+        let store = cache(&self.shared.cache, true)?;
+        match selected_source(&store, &root)? {
+            Some(source) => store
+                .human_activity_bands(&source, from, to, timezone)
+                .map_err(|e| e.to_string()),
+            None => Ok(HumanActivityResponse {
+                records: vec![],
+                bins: Some(vec![]),
+                diagnostics: vec![],
+            }),
+        }
+    }
     pub fn summary(
         &self,
         from: i64,
