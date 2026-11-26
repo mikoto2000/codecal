@@ -16,6 +16,8 @@ pub struct HumanTimeBin {
     pub day_start: i64,
     pub day_end: i64,
     pub total_ms: i64,
+    /// Union of non-entertainment and unknown, independent of raw-kind totals.
+    pub other_ms: i64,
     pub kinds: BTreeMap<HumanKind, i64>,
     pub points: BTreeMap<HumanKind, bool>,
 }
@@ -23,6 +25,20 @@ pub struct HumanTimeBin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn other_group_unions_non_entertainment_with_unknown() {
+        let mut a = Accumulator::new(0, 300000, "UTC").unwrap();
+        for (start, end, kind) in [
+            (0, 120000, HumanKind::NonEntertainment),
+            (60000, 180000, HumanKind::Unknown),
+        ] {
+            a.add(HumanActivity { start, end, kind }).unwrap();
+        }
+        let bins = a.finish();
+        assert_eq!(bins[0].other_ms, 180000);
+        assert_eq!(bins[0].kinds[&HumanKind::NonEntertainment], 120000);
+        assert_eq!(bins[0].kinds[&HumanKind::Unknown], 120000);
+    }
     #[test]
     fn dense_overlaps_gaps_points_and_request_clipping() {
         let mut a = Accumulator::new(1000, 600000, "UTC").unwrap();
@@ -106,7 +122,7 @@ impl Union {
 }
 struct Slot {
     bin: HumanTimeBin,
-    unions: [Union; 4],
+    unions: [Union; 5],
     observed: bool,
 }
 pub(crate) struct Accumulator {
@@ -150,6 +166,7 @@ impl Accumulator {
                         day_start,
                         day_end,
                         total_ms: 0,
+                        other_ms: 0,
                         kinds: KINDS.into_iter().map(|k| (k, 0)).collect(),
                         points: KINDS.into_iter().map(|k| (k, false)).collect(),
                     },
@@ -195,6 +212,9 @@ impl Accumulator {
                 let end = record.end.min(slot.bin.end);
                 slot.unions[i].add(start, end);
                 slot.unions[3].add(start, end);
+                if record.kind != HumanKind::Entertainment {
+                    slot.unions[4].add(start, end);
+                }
             }
         }
         Ok(())
@@ -208,6 +228,7 @@ impl Accumulator {
                     s.bin.kinds.insert(k, s.unions[i].total);
                 }
                 s.bin.total_ms = s.unions[3].total;
+                s.bin.other_ms = s.unions[4].total;
                 s.bin
             })
             .collect()

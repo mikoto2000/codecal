@@ -1,13 +1,10 @@
 import { useMemo } from "react";
 import { DateTime } from "luxon";
 import { useHumanActivity } from "./useHumanActivity";
+import { humanDisplayLabels, displayKind } from "./human-display";
 import { HumanTotals } from "./HumanTotals";
 import { formatDuration } from "./calendar";
-import {
-  humanLabels,
-  indexHumanActivity,
-  type HumanSegment,
-} from "./human-calendar";
+import { indexHumanActivity, type HumanSegment } from "./human-calendar";
 import type { HumanActivityKind, HumanDaySummary } from "./types";
 import type { GroupingMode } from "./activity-groups";
 
@@ -88,10 +85,12 @@ export function HumanDayList({
             return (
               <button
                 key={record.id}
-                aria-label={`人間 ${humanLabels[record.kind]} ${times}${record.point ? " 点の観測" : " 推定区間"}`}
+                aria-label={`人間 ${humanDisplayLabels[displayKind(record.kind)]} ${times}${record.point ? " 点の観測" : " 推定区間"}`}
                 onClick={() => open(record)}
               >
-                <strong>人間 · {humanLabels[record.kind]}</strong>
+                <strong>
+                  人間 · {humanDisplayLabels[displayKind(record.kind)]}
+                </strong>
                 <span>
                   {times} · 推定 {formatDuration(record.end - record.start)}
                   {record.point && " · 点の観測"}

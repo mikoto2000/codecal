@@ -1,6 +1,12 @@
 import type { CSSProperties } from "react";
 import { formatDuration } from "./calendar";
-import { humanColors, humanLabels } from "./human-calendar";
+import {
+  humanDisplayKinds,
+  humanDisplayLabels,
+  humanDisplayMembers,
+  humanDisplayColors,
+  displayDuration,
+} from "./human-display";
 import type { HumanActivityKind, HumanDaySummary } from "./types";
 export function HumanDayBars({
   day,
@@ -12,25 +18,33 @@ export function HumanDayBars({
   if (!visible.some((kind) => day.observed.includes(kind))) return null;
   return (
     <span className="human-day-bars">
-      {visible.map((kind) => {
-        const point = day.kinds[kind] === 0 && day.observed.includes(kind);
-        return (
-          <span
-            key={kind}
-            className="human-day-bar"
-            role="img"
-            aria-label={`${humanLabels[kind]} 推定 ${formatDuration(day.kinds[kind])}${point ? " 点の観測" : ""}`}
-            style={{ "--human-color": humanColors[kind] } as CSSProperties}
-          >
+      {humanDisplayKinds
+        .filter((kind) =>
+          humanDisplayMembers[kind].some((k) => visible.includes(k)),
+        )
+        .map((kind) => {
+          const point =
+            displayDuration(day, kind) === 0 &&
+            humanDisplayMembers[kind].some((k) => day.observed.includes(k));
+          return (
             <span
-              className={point ? "point" : ""}
-              style={{
-                width: `${Math.min(100, (100 * day.kinds[kind]) / day.day_length_ms)}%`,
-              }}
-            />
-          </span>
-        );
-      })}
+              key={kind}
+              className="human-day-bar"
+              role="img"
+              aria-label={`${humanDisplayLabels[kind]} 推定 ${formatDuration(displayDuration(day, kind))}${point ? " 点の観測" : ""}`}
+              style={
+                { "--human-color": humanDisplayColors[kind] } as CSSProperties
+              }
+            >
+              <span
+                className={point ? "point" : ""}
+                style={{
+                  width: `${Math.min(100, (100 * displayDuration(day, kind)) / day.day_length_ms)}%`,
+                }}
+              />
+            </span>
+          );
+        })}
     </span>
   );
 }

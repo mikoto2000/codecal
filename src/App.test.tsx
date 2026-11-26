@@ -97,6 +97,7 @@ beforeEach(() => {
     revision: 1,
     error: null,
     last_success: null,
+    next_auto_sync: null,
   });
   vi.mocked(api.humanEvents).mockResolvedValue(() => {});
   vi.mocked(api.humanSync).mockResolvedValue(undefined);
@@ -158,6 +159,7 @@ async function withHuman(records = humanRecords) {
             day_length_ms:
               DateTime.fromISO(date, { zone }).plus({ days: 1 }).toMillis() -
               DateTime.fromISO(date, { zone }).toMillis(),
+            other_ms: summarizeHumanDays(index, [date], humanKinds).other_ms,
             total_ms: summarizeHumanDays(index, [date], visible).total_ms,
             kinds: summarizeHumanDays(index, [date], humanKinds).kinds,
             observed: [
@@ -199,9 +201,9 @@ it("keeps human observed totals independent of AI and explains overlapping kind 
   expect(within(region).getByLabelText("娯楽の推定時間")).toHaveTextContent(
     "1h 0m",
   );
-  expect(within(region).getByLabelText("非娯楽の推定時間")).toHaveTextContent(
-    "1h 0m",
-  );
+  expect(
+    within(region).getByLabelText("非娯楽（不明含む）の推定時間"),
+  ).toHaveTextContent("1h 0m");
   expect(region).toHaveTextContent("種別間で重なる時間");
   expect(screen.getByTestId("total-elapsed")).toHaveTextContent("2h 0m");
   fireEvent.click(screen.getByRole("checkbox", { name: "人間の娯楽を表示" }));
@@ -226,13 +228,13 @@ it("adds independent human month bars while preserving AI heat levels and prefil
   const cell = await screen.findByRole("button", { name: /^2026-11-20 / });
   expect(cell).toHaveAttribute("data-level", "2");
   await act(async () => {});
-  expect(cell.querySelectorAll(".human-day-bar")).toHaveLength(3);
+  expect(cell.querySelectorAll(".human-day-bar")).toHaveLength(2);
   const bar = within(cell).getByRole("img", { name: "娯楽 推定 1h 0m" });
   expect(
     parseFloat((bar.firstElementChild as HTMLElement).style.width),
   ).toBeCloseTo(100 / 24);
   expect(
-    within(cell).getByRole("img", { name: "不明 推定 0h 0m 点の観測" }),
+    within(cell).getByRole("img", { name: "非娯楽（不明含む） 推定 0h 30m" }),
   ).toBeVisible();
   expect(
     screen.getByText(/実際の日長に対する種別ごとの独立した比率/),
@@ -274,7 +276,7 @@ it("opens human-only monthly day details with a separate AI list and a zero-seco
     name: "人間のアクティビティ（推定）",
   });
   const point = await within(human).findByRole("button", {
-    name: /^人間 不明 /,
+    name: /^人間 非娯楽（不明含む） .*点の観測/,
   });
   expect(within(human).getByTestId("human-total")).toHaveTextContent("1h 30m");
   fireEvent.click(point);
@@ -307,12 +309,14 @@ it("applies month kind filters to day records and requests the selected day disp
     ),
   );
   fireEvent.click(within(dialog).getByRole("button", { name: "閉じる" }));
-  fireEvent.click(screen.getByRole("checkbox", { name: "人間の非娯楽を表示" }));
+  fireEvent.click(
+    screen.getByRole("checkbox", { name: "人間の非娯楽（不明含む）を表示" }),
+  );
   fireEvent.click(cell);
   dialog = screen.getByRole("dialog", { name: "2026-11-20 のアクティビティ" });
   await within(dialog).findByRole("button", { name: /^人間 娯楽 / });
   expect(
-    within(dialog).queryByRole("button", { name: /^人間 非娯楽 / }),
+    within(dialog).queryByRole("button", { name: /^人間 非娯楽（不明含む） / }),
   ).not.toBeInTheDocument();
   expect(
     within(dialog).getByRole("region", { name: "AIの実行履歴" }),
@@ -324,7 +328,7 @@ it("restores the original AI month presentation after human activity is disabled
   fireEvent.click(screen.getByRole("button", { name: "月" }));
   await screen.findByRole("button", { name: /^2026-11-20 / });
   await act(async () => {});
-  expect(document.querySelectorAll(".human-day-bar")).toHaveLength(3);
+  expect(document.querySelectorAll(".human-day-bar")).toHaveLength(2);
   fireEvent.click(screen.getByRole("button", { name: "設定" }));
   fireEvent.click(
     screen.getByLabelText("人間のアクティビティ機能を有効にする"),
@@ -400,7 +404,7 @@ it("keeps independent filter hours and targets bulk operations to their own list
   fireEvent.click(project);
   expect(within(project.closest("label")!).getByText("2h 0m")).toBeVisible();
   expect(
-    screen.getAllByRole("button", { name: /^人間 非娯楽 / })[0],
+    screen.getAllByRole("button", { name: /^人間 非娯楽（不明含む） / })[0],
   ).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "人間の種別をすべてON" }));
   expect(humanCheckbox).toBeChecked();
@@ -461,6 +465,7 @@ it("uses bounded bins for day and week and keeps AI display controls independent
         day_start: midnight,
         day_end: midnight + 86400000,
         total_ms: 90000,
+        other_ms: 30000,
         kinds: { entertainment: 60000, non_entertainment: 30000, unknown: 0 },
         points: {
           entertainment: false,
@@ -473,7 +478,7 @@ it("uses bounded bins for day and week and keeps AI display controls independent
   await mount();
   const cell = await screen.findByRole("button", { name: /^人間 娯楽 / });
   expect(cell).toHaveStyle({ height: "5px" });
-  expect(document.querySelectorAll(".human-time-lane")).toHaveLength(21);
+  expect(document.querySelectorAll(".human-time-lane")).toHaveLength(14);
   expect(api.humanActivity).toHaveBeenLastCalledWith(
     expect.any(Number),
     expect.any(Number),
@@ -490,7 +495,7 @@ it("uses bounded bins for day and week and keeps AI display controls independent
   fireEvent.click(screen.getByRole("button", { name: "閉じる" }));
   fireEvent.click(screen.getByRole("button", { name: "日" }));
   await waitFor(() =>
-    expect(document.querySelectorAll(".human-time-lane")).toHaveLength(3),
+    expect(document.querySelectorAll(".human-time-lane")).toHaveLength(2),
   );
   expect(
     await screen.findByRole("button", { name: /^人間 娯楽 / }),
@@ -546,7 +551,9 @@ it("opens a zero-second human point and clears its detail when the date changes"
   await withHuman();
   await mount();
   fireEvent.click(
-    await screen.findByRole("button", { name: /^人間 不明 .*点の観測/ }),
+    await screen.findByRole("button", {
+      name: /^人間 非娯楽（不明含む） .*点の観測/,
+    }),
   );
   const detail = screen.getByRole("dialog", {
     name: "人間のアクティビティ（推定）",

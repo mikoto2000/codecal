@@ -1,6 +1,12 @@
 import type { CSSProperties } from "react";
 import { DateTime } from "luxon";
-import { humanColors, humanKinds, humanLabels } from "./human-calendar";
+import {
+  displayDuration,
+  humanDisplayKinds,
+  humanDisplayLabels,
+  humanDisplayMembers,
+  humanDisplayColors,
+} from "./human-display";
 import { formatDuration } from "./calendar";
 import type { HumanTimeBin } from "./human-time-bands";
 import type { HumanActivityKind } from "./types";
@@ -19,21 +25,29 @@ export function HumanTimeBands({
   open: (bin: HumanTimeBin) => void;
 }) {
   return (
-    <div className="human-time-bands" aria-label="人間の5分集約・固定3列">
-      {humanKinds.map((kind) => (
+    <div className="human-time-bands" aria-label="人間の5分集約・固定2列">
+      {humanDisplayKinds.map((kind) => (
         <div
           className="human-time-lane"
           key={kind}
           data-kind={kind}
-          aria-label={humanLabels[kind]}
+          aria-label={humanDisplayLabels[kind]}
         >
-          {visible.includes(kind) &&
+          {humanDisplayMembers[kind].some((k) => visible.includes(k)) &&
             bins
-              .filter((b) => b.kinds[kind] > 0 || b.points[kind])
+              .filter(
+                (b) =>
+                  displayDuration(b, kind) > 0 ||
+                  humanDisplayMembers[kind].some((k) => b.points[k]),
+              )
               .map((bin) => {
-                const point = bin.points[kind] && bin.kinds[kind] === 0;
+                const duration = displayDuration(bin, kind);
+                const hasPoint = humanDisplayMembers[kind].some(
+                  (k) => bin.points[k],
+                );
+                const point = hasPoint && duration === 0;
                 const times = `${DateTime.fromMillis(bin.start, { zone }).toFormat("HH:mm ZZ")} – ${DateTime.fromMillis(bin.end, { zone }).toFormat("HH:mm ZZ")}`;
-                const label = `人間 ${humanLabels[kind]} ${times} 推定 ${formatDuration(bin.kinds[kind])}${point ? " 点の観測" : ""}`;
+                const label = `人間 ${humanDisplayLabels[kind]} ${times} 推定 ${formatDuration(duration)}${hasPoint ? (point ? " 点の観測" : " 点の観測を含む") : ""}`;
                 return (
                   <button
                     key={bin.start}
@@ -44,9 +58,8 @@ export function HumanTimeBands({
                       {
                         top: bin.top * scale,
                         height: bin.height * scale,
-                        "--human-color":
-                          kind === "unknown" ? "#a8b2c1" : humanColors[kind],
-                        "--coverage": `${Math.max(12, (100 * bin.kinds[kind]) / (bin.end - bin.start))}%`,
+                        "--human-color": humanDisplayColors[kind],
+                        "--coverage": `${Math.max(12, (100 * duration) / (bin.end - bin.start))}%`,
                       } as CSSProperties
                     }
                     onClick={() => open(bin)}

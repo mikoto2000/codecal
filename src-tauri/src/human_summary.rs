@@ -15,6 +15,8 @@ pub struct HumanDaySummary {
     pub date: String,
     pub day_length_ms: i64,
     pub total_ms: i64,
+    /// Union of non-entertainment and unknown, independent of raw-kind totals.
+    pub other_ms: i64,
     pub kinds: BTreeMap<HumanKind, i64>,
     pub observed: BTreeSet<HumanKind>,
 }
@@ -40,7 +42,7 @@ struct Day {
     start: i64,
     end: i64,
     summary: HumanDaySummary,
-    unions: [Union; 4],
+    unions: [Union; 5],
 }
 /// Records must arrive in nondecreasing start order. Storage streams its index.
 pub(crate) struct Accumulator {
@@ -85,6 +87,7 @@ impl Accumulator {
                     date: local.format("%Y-%m-%d").to_string(),
                     day_length_ms: boundary - day_start,
                     total_ms: 0,
+                    other_ms: 0,
                     kinds: KINDS.into_iter().map(|k| (k, 0)).collect(),
                     observed: BTreeSet::new(),
                 },
@@ -116,6 +119,9 @@ impl Accumulator {
                 .position(|k| *k == record.kind)
                 .expect("all normalized kinds");
             day.unions[index].add(start, end);
+            if record.kind != HumanKind::Entertainment {
+                day.unions[4].add(start, end);
+            }
             if self.visible.contains(&record.kind) {
                 day.unions[3].add(start, end);
             }
@@ -131,6 +137,7 @@ impl Accumulator {
                     day.summary.kinds.insert(kind, day.unions[i].total);
                 }
                 day.summary.total_ms = day.unions[3].total;
+                day.summary.other_ms = day.unions[4].total;
                 day.summary
             })
             .collect()
@@ -140,6 +147,19 @@ impl Accumulator {
 mod tests {
     use super::*;
     use crate::rei_human::{HumanActivity, HumanKind};
+    #[test]
+    fn other_group_has_its_own_union_without_losing_raw_kinds() {
+        let mut a = Accumulator::new(0, 86400000, "UTC", &KINDS).unwrap();
+        for (start, end, kind) in [
+            (0, 120000, HumanKind::NonEntertainment),
+            (60000, 180000, HumanKind::Unknown),
+        ] {
+            a.add(HumanActivity { start, end, kind }).unwrap();
+        }
+        let days = a.finish();
+        assert_eq!(days[0].other_ms, 180000);
+        assert_eq!(days[0].kinds[&HumanKind::Unknown], 120000);
+    }
     #[test]
     fn overlapping_kinds_have_independent_unions_and_filtered_total() {
         let mut summary = Accumulator::new(

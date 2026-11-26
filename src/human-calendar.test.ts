@@ -34,6 +34,7 @@ it("unions same-kind overlaps and keeps different-kind totals independent", () =
   );
   expect(summarizeHumanDays(index, ["2026-11-20"])).toEqual({
     total_ms: 4000,
+    other_ms: 3000,
     kinds: { entertainment: 3000, non_entertainment: 3000, unknown: 0 },
   });
   expect(

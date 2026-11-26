@@ -9,6 +9,7 @@ export type HumanTimeBin = {
   top: number;
   height: number;
   total_ms: number;
+  other_ms: number;
   kinds: Record<HumanActivityKind, number>;
   points: Record<HumanActivityKind, boolean>;
 };
@@ -47,6 +48,7 @@ export function buildHumanTimeBins(
           top: ((start - from) / (to - from)) * 1440,
           height: ((end - start) / (to - from)) * 1440,
           total_ms: 0,
+          other_ms: 0,
           kinds: emptyKinds(),
           points: {
             entertainment: false,
@@ -59,12 +61,22 @@ export function buildHumanTimeBins(
       return bin;
     };
     // Each pass keeps its own union endpoint; overlapping kinds remain independent.
-    for (const kind of [...humanKinds, null]) {
+    for (const kind of [...humanKinds, "other", null] as const) {
       let previousEnd = from;
       for (const record of ordered) {
-        if (kind !== null && record.kind !== kind) continue;
+        if (
+          kind === "other"
+            ? record.kind === "entertainment"
+            : kind !== null && record.kind !== kind
+        )
+          continue;
         if (record.start === record.end) {
-          if (kind !== null && record.start >= from && record.start < to)
+          if (
+            kind !== null &&
+            kind !== "other" &&
+            record.start >= from &&
+            record.start < to
+          )
             get(record.start).points[kind] = true;
           continue;
         }
@@ -76,6 +88,7 @@ export function buildHumanTimeBins(
           const bin = get(start),
             stop = Math.min(end, bin.end);
           if (kind === null) bin.total_ms += stop - start;
+          else if (kind === "other") bin.other_ms += stop - start;
           else bin.kinds[kind] += stop - start;
           start = stop;
         }

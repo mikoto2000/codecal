@@ -1,5 +1,11 @@
 import { formatDuration } from "./calendar";
-import { humanKinds, humanLabels } from "./human-calendar";
+import {
+  humanDisplayKinds,
+  humanDisplayLabels,
+  humanDisplayMembers,
+  displayDuration,
+  type HumanDisplayKind,
+} from "./human-display";
 import type { HumanActivityKind, HumanDaySummary } from "./types";
 
 export function HumanTotals({
@@ -20,13 +26,13 @@ export function HumanTotals({
   const selected = days.filter((day) => dates.includes(day.date));
   const total = selected.reduce((sum, day) => sum + day.total_ms, 0);
   const kinds = Object.fromEntries(
-    humanKinds.map((kind) => [
+    humanDisplayKinds.map((kind) => [
       kind,
-      visible.includes(kind)
-        ? selected.reduce((sum, day) => sum + day.kinds[kind], 0)
+      humanDisplayMembers[kind].some((k) => visible.includes(k))
+        ? selected.reduce((sum, day) => sum + displayDuration(day, kind), 0)
         : 0,
     ]),
-  ) as Record<HumanActivityKind, number>;
+  ) as Record<HumanDisplayKind, number>;
   const unavailable = loading || !!error;
   return (
     <section
@@ -41,13 +47,20 @@ export function HumanTotals({
           {unavailable ? "—" : formatDuration(total)}
         </strong>
       </div>
-      {humanKinds.map((kind) => (
-        <div key={kind} className={!visible.includes(kind) ? "unselected" : ""}>
-          <span>{humanLabels[kind]}</span>
-          <strong aria-label={`${humanLabels[kind]}の推定時間`}>
+      {humanDisplayKinds.map((kind) => (
+        <div
+          key={kind}
+          className={
+            !humanDisplayMembers[kind].some((k) => visible.includes(k))
+              ? "unselected"
+              : ""
+          }
+        >
+          <span>{humanDisplayLabels[kind]}</span>
+          <strong aria-label={`${humanDisplayLabels[kind]}の推定時間`}>
             {unavailable
               ? "—"
-              : visible.includes(kind)
+              : humanDisplayMembers[kind].some((k) => visible.includes(k))
                 ? formatDuration(kinds[kind])
                 : "非表示"}
           </strong>

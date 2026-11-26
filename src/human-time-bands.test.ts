@@ -73,3 +73,15 @@ it("bounds dense data by time slots and preserves independent overlapping kinds"
   expect(bins[0].kinds.entertainment).toBe(300000);
   expect(bins[0].kinds.non_entertainment).toBe(300000);
 });
+
+it("unions non-entertainment and unknown rather than adding overlapping durations", () => {
+  const bins = buildHumanTimeBins(
+    [
+      { start, end: start + 120000, kind: "non_entertainment" },
+      { start: start + 60000, end: start + 180000, kind: "unknown" },
+    ],
+    ["2026-11-20"],
+    "UTC",
+  ).get("2026-11-20")!;
+  expect(bins[0].other_ms).toBe(180000);
+});

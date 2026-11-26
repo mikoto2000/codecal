@@ -80,6 +80,7 @@ export type HumanActivityResponse = {
 export type HumanDaySummary = {
   date: string;
   day_length_ms: number;
+  other_ms: number;
   total_ms: number;
   kinds: Record<HumanActivityKind, number>;
   observed: HumanActivityKind[];
@@ -94,5 +95,6 @@ export type HumanSyncStatus = {
   revision: number;
   error: string | null;
   last_success: number | null;
+  next_auto_sync: number | null;
 };
 export type HumanClearResult = { compacted: boolean; staging_cleared: boolean };

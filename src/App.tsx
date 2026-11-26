@@ -15,17 +15,21 @@ import { DateTime } from "luxon";
 import { api } from "./api";
 import { useHumanActivity } from "./useHumanActivity";
 import { useHumanSummary } from "./useHumanSummary";
+import { HumanSyncTimes } from "./HumanSyncTimes";
 import { HumanTotals } from "./HumanTotals";
+import {
+  humanDisplayKinds,
+  humanDisplayLabels,
+  humanDisplayColors,
+  humanDisplayMembers,
+  displayDuration,
+  type HumanDisplayKind,
+} from "./human-display";
 import { HumanTimeBands } from "./HumanTimeBands";
 import { buildHumanTimeBins, type HumanTimeBin } from "./human-time-bands";
 import { HumanDayBars } from "./HumanDayBars";
 import { HumanDayList } from "./HumanDayList";
-import {
-  humanKinds,
-  humanLabels,
-  humanColors,
-  type HumanSegment,
-} from "./human-calendar";
+import { humanKinds, humanLabels, type HumanSegment } from "./human-calendar";
 import { useTimelineZoom } from "./useTimelineZoom";
 import {
   groupActivity,
@@ -392,13 +396,13 @@ export default function App({ initialDate }: { initialDate?: string }) {
   const humanHours = useMemo(
     () =>
       Object.fromEntries(
-        humanKinds.map((kind) => [
+        humanDisplayKinds.map((kind) => [
           kind,
           humanSummary.unfilteredDays
             .filter((day) => visibleDays.includes(day.date))
-            .reduce((sum, day) => sum + day.kinds[kind], 0),
+            .reduce((sum, day) => sum + displayDuration(day, kind), 0),
         ]),
-      ) as Record<HumanActivityKind, number>,
+      ) as Record<HumanDisplayKind, number>,
     [humanSummary.unfilteredDays, visibleDays],
   );
   const humanByDate = useMemo(
@@ -724,29 +728,35 @@ export default function App({ initialDate }: { initialDate?: string }) {
             >
               すべて{hiddenHuman.size === 0 ? "OFF" : "ON"}
             </button>
-            {humanKinds.map((kind) => (
+            {humanDisplayKinds.map((kind) => (
               <label
                 key={kind}
-                className={`project-filter ${hiddenHuman.has(kind) ? "unselected" : ""}`}
+                className={`project-filter ${humanDisplayMembers[kind].every((k) => hiddenHuman.has(k)) ? "unselected" : ""}`}
               >
                 <input
                   type="checkbox"
-                  checked={!hiddenHuman.has(kind)}
-                  aria-label={`人間の${humanLabels[kind]}を表示`}
+                  checked={
+                    !humanDisplayMembers[kind].every((k) => hiddenHuman.has(k))
+                  }
+                  aria-label={`人間の${humanDisplayLabels[kind]}を表示`}
                   onChange={() =>
                     setHiddenHuman((old) => {
                       const next = new Set(old);
-                      if (next.has(kind)) next.delete(kind);
-                      else next.add(kind);
+                      const members = humanDisplayMembers[kind];
+                      const hide = !members.every((k) => next.has(k));
+                      members.forEach((k) => {
+                        if (hide) next.add(k);
+                        else next.delete(k);
+                      });
                       return next;
                     })
                   }
                 />
                 <span
                   className="dot"
-                  style={{ background: humanColors[kind] }}
+                  style={{ background: humanDisplayColors[kind] }}
                 />
-                <span className="project-name">{humanLabels[kind]}</span>
+                <span className="project-name">{humanDisplayLabels[kind]}</span>
                 <small>
                   {humanHoursUnavailable
                     ? "—"
@@ -763,6 +773,11 @@ export default function App({ initialDate }: { initialDate?: string }) {
               <p className="hint">
                 {config.auto_refresh ? "自動同期: 1時間ごと" : "自動同期: OFF"}
               </p>
+              <HumanSyncTimes
+                status={humanState.status}
+                zone={zone}
+                autoRefresh={config.auto_refresh}
+              />
               <p role="status">
                 {humanState.status.busy
                   ? "人間のアクティビティを同期中…"
@@ -1122,7 +1137,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
                 {config.human_activity_enabled && (
                   <span className="grouping-hint">
                     人間:
-                    固定3列・5分集約（濃いほど推定時間が長い／点線は0秒の観測）
+                    固定2列・5分集約（非娯楽※は不明を含む／濃いほど推定時間が長い／点線は0秒の観測）
                   </span>
                 )}
                 <div className="timeline-zoom-controls">
@@ -1168,11 +1183,13 @@ export default function App({ initialDate }: { initialDate?: string }) {
                               groups.length > 0 ? "min(38%, 120px)" : "100%",
                             alignSelf: "flex-start",
                           }}
-                          aria-label="人間の列順: 娯楽・非娯楽・不明"
+                          aria-label="人間の列順: 娯楽・非娯楽（不明含む）"
                         >
-                          {humanKinds.map((kind) => (
-                            <span key={kind} title={humanLabels[kind]}>
-                              {humanLabels[kind]}
+                          {humanDisplayKinds.map((kind) => (
+                            <span key={kind} title={humanDisplayLabels[kind]}>
+                              {kind === "other" && view === "week"
+                                ? "非娯楽※"
+                                : humanDisplayLabels[kind]}
                             </span>
                           ))}
                         </div>
@@ -1380,11 +1397,17 @@ export default function App({ initialDate }: { initialDate?: string }) {
                     const humanDay = humanByDate.get(d);
                     const humanDescription =
                       config.human_activity_enabled && humanDay
-                        ? visibleHumanKinds
-                            .filter((kind) => humanDay.observed.includes(kind))
+                        ? humanDisplayKinds
+                            .filter((kind) =>
+                              humanDisplayMembers[kind].some(
+                                (k) =>
+                                  visibleHumanKinds.includes(k) &&
+                                  humanDay.observed.includes(k),
+                              ),
+                            )
                             .map(
                               (kind) =>
-                                `${humanLabels[kind]} ${formatDuration(humanDay.kinds[kind])}${humanDay.kinds[kind] === 0 ? " 点の観測" : ""}`,
+                                `${humanDisplayLabels[kind]} ${formatDuration(displayDuration(humanDay, kind))}${displayDuration(humanDay, kind) === 0 ? " 点の観測" : ""}`,
                             )
                             .join("、")
                         : "";
@@ -1430,10 +1453,10 @@ export default function App({ initialDate }: { initialDate?: string }) {
               </div>
               {config.human_activity_enabled && (
                 <div className="human-legend" aria-label="人間の活動バーの凡例">
-                  {humanKinds.map((kind) => (
+                  {humanDisplayKinds.map((kind) => (
                     <span key={kind}>
-                      <i style={{ background: humanColors[kind] }} />
-                      {humanLabels[kind]}
+                      <i style={{ background: humanDisplayColors[kind] }} />
+                      {humanDisplayLabels[kind]}
                     </span>
                   ))}
                   <small>
@@ -1478,21 +1501,30 @@ export default function App({ initialDate }: { initialDate?: string }) {
                   <dd>{dateText(selectedHuman.bin.end)}（集約枠の末尾）</dd>
                   <dt>全種別の推定時間（重複を除く）</dt>
                   <dd>{formatDuration(selectedHuman.bin.total_ms)}</dd>
-                  {visibleHumanKinds.map((kind) => (
-                    <Fragment key={kind}>
-                      <dt>{humanLabels[kind]}</dt>
-                      <dd>
-                        {formatDuration(selectedHuman.bin.kinds[kind])}{" "}
-                        {(
-                          (selectedHuman.bin.kinds[kind] % 60000) /
-                          1000
-                        ).toFixed(3)}
-                        s
-                        {selectedHuman.bin.points[kind] &&
-                          " · 0秒の点の観測を含む"}
-                      </dd>
-                    </Fragment>
-                  ))}
+                  {humanDisplayKinds
+                    .filter((kind) =>
+                      humanDisplayMembers[kind].some((k) =>
+                        visibleHumanKinds.includes(k),
+                      ),
+                    )
+                    .map((kind) => (
+                      <Fragment key={kind}>
+                        <dt>{humanDisplayLabels[kind]}</dt>
+                        <dd>
+                          {formatDuration(
+                            displayDuration(selectedHuman.bin, kind),
+                          )}{" "}
+                          {(
+                            (displayDuration(selectedHuman.bin, kind) % 60000) /
+                            1000
+                          ).toFixed(3)}
+                          s
+                          {humanDisplayMembers[kind].some(
+                            (k) => selectedHuman.bin.points[k],
+                          ) && " · 0秒の点の観測を含む"}
+                        </dd>
+                      </Fragment>
+                    ))}
                 </dl>
                 <p className="hint">
                   Rei
