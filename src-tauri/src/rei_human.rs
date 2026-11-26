@@ -772,6 +772,27 @@ impl HumanReader {
 }
 
 impl crate::store::Store {
+    pub(crate) fn human_last_sync(&self, source: &str) -> Result<Option<i64>, HumanError> {
+        let key = source_key(&self.conn, source)?;
+        self.conn
+            .query_row(
+                "SELECT last_sync FROM human_activity_sources WHERE source_id=?",
+                [key],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(cache_read_error)
+    }
+    pub(crate) fn mark_human_checked(&self, source: &str, time: i64) -> Result<(), HumanError> {
+        let key = source_key(&self.conn, source)?;
+        self.conn
+            .execute(
+                "UPDATE human_activity_sources SET last_sync=? WHERE source_id=?",
+                params![time, key],
+            )
+            .map_err(cache_write_error)?;
+        Ok(())
+    }
     pub fn human_summary(
         &self,
         source: &str,

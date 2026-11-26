@@ -24,6 +24,7 @@ pub struct HumanSyncStatus {
     pub revision: u64,
     pub error: Option<String>,
     pub last_success: Option<i64>,
+    pub next_auto_sync: Option<i64>,
 }
 #[derive(Serialize)]
 pub struct HumanClearResult {
@@ -86,6 +87,7 @@ struct Control {
     pending: bool,
     force: bool,
     settled_epoch: u64,
+    last_finished: Option<Instant>,
 }
 struct Shared {
     control: Mutex<Control>,
@@ -159,6 +161,7 @@ impl HumanRuntime {
                 pending: false,
                 force: false,
                 settled_epoch: 1,
+                last_finished: None,
             }),
             wake: Condvar::new(),
             operation: Mutex::new(()),
@@ -178,7 +181,7 @@ impl HumanRuntime {
         }
     }
     pub fn status(&self) -> HumanSyncStatus {
-        lock(&self.shared.control).status.clone()
+        status_snapshot(&lock(&self.shared.control), self.shared.auto_interval)
     }
     pub fn configure(
         &self,
@@ -189,6 +192,7 @@ impl HumanRuntime {
         let _gate = lock(&self.shared.gate);
         persist()?;
         let mut control = lock(&self.shared.control);
+        let auto_changed = control.preferences.auto_refresh != preferences.auto_refresh;
         let changed = control.preferences.enabled != preferences.enabled
             || control.preferences.root != preferences.root;
         if changed {
@@ -197,6 +201,7 @@ impl HumanRuntime {
                 generation,
                 ..HumanSyncStatus::default()
             };
+            control.last_finished = None;
             control.pending = preferences.enabled;
             control.force = preferences.enabled;
         }
@@ -204,7 +209,14 @@ impl HumanRuntime {
             control.pending = false;
         }
         control.preferences = preferences;
+        let status = status_snapshot(&control, self.shared.auto_interval);
+        drop(control);
+        drop(_gate);
+        drop(_operation);
         self.shared.wake.notify_all();
+        if auto_changed && !changed {
+            (self.shared.notify)(status);
+        }
         Ok(())
     }
     pub fn request(&self, force: bool) {
@@ -443,6 +455,28 @@ impl Drop for HumanRuntime {
         }
     }
 }
+fn status_snapshot(control: &Control, interval: Duration) -> HumanSyncStatus {
+    let mut status = control.status.clone();
+    status.next_auto_sync = if control.preferences.enabled
+        && control.preferences.auto_refresh
+        && !status.busy
+        && !control.force
+    {
+        control.last_finished.map(|finished| {
+            chrono::Utc::now().timestamp_millis()
+                + interval.saturating_sub(finished.elapsed()).as_millis() as i64
+        })
+    } else {
+        None
+    };
+    status
+}
+fn cached_success(store: &Store, root: &Path) -> Result<Option<i64>, String> {
+    let Some(source) = selected_source(store, root)? else {
+        return Ok(None);
+    };
+    store.human_last_sync(&source).map_err(|e| e.to_string())
+}
 fn sync_ready(control: &Control, elapsed: Duration, interval: Duration) -> bool {
     control.preferences.enabled
         && control.pending
@@ -487,8 +521,20 @@ fn run(shared: Arc<Shared>) {
         control.pending = false;
         control.force = false;
         control.status.busy = true;
-        let status = control.status.clone();
+        let restore_timestamp = control.status.last_success.is_none();
         drop(control);
+        if restore_timestamp && shared.epoch.load(Ordering::SeqCst) == epoch {
+            let saved = cache(&shared.cache, true)
+                .and_then(|store| cached_success(&store, &preferences.root))
+                .ok()
+                .flatten();
+            let mut control = lock(&shared.control);
+            if shared.epoch.load(Ordering::SeqCst) == epoch && control.status.last_success.is_none()
+            {
+                control.status.last_success = saved;
+            }
+        }
+        let status = status_snapshot(&lock(&shared.control), shared.auto_interval);
         (shared.notify)(status);
         let began = Instant::now();
         let cancelled = || {
@@ -513,6 +559,13 @@ fn run(shared: Arc<Shared>) {
             }
             let source = reader.as_ref().ok_or("source_unavailable")?;
             if !force && version == Some(source.data_version().map_err(|e| e.to_string())?) {
+                let _gate = lock(&shared.gate);
+                if cancelled() {
+                    return Err("sync_cancelled".into());
+                }
+                cache(&shared.cache, false)?
+                    .mark_human_checked(source.source_id(), chrono::Utc::now().timestamp_millis())
+                    .map_err(|e| e.to_string())?;
                 return Ok(None);
             }
             std::fs::create_dir_all(&shared.staging).map_err(|_| "staging_failed")?;
@@ -542,6 +595,7 @@ fn run(shared: Arc<Shared>) {
                     control.status.error = None;
                 }
                 Ok(None) => {
+                    control.status.last_success = Some(chrono::Utc::now().timestamp_millis());
                     control.status.error = None;
                 }
                 Err(error) => {
@@ -552,8 +606,11 @@ fn run(shared: Arc<Shared>) {
             }
         }
         control.status.busy = false;
-        let status = control.status.clone();
         last_finished = Instant::now();
+        if shared.epoch.load(Ordering::SeqCst) == epoch {
+            control.last_finished = Some(last_finished);
+        }
+        let status = status_snapshot(&control, shared.auto_interval);
         shared.wake.notify_all();
         drop(control);
         (shared.notify)(status);
@@ -581,6 +638,133 @@ mod schedule_tests {
             assert!(Instant::now() < deadline, "worker did not settle");
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+    #[test]
+    fn unchanged_checks_update_persisted_success_and_restart_failure_restores_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("cache.db");
+        drop(Store::open(&cache).unwrap());
+        let root = tmp.path().join("source");
+        std::fs::create_dir(&root).unwrap();
+        source(&root.join("storage.db"), 1);
+        {
+            let runtime = HumanRuntime::with_auto_interval(
+                cache.clone(),
+                tmp.path().join("stage"),
+                |_| {},
+                Duration::from_millis(150),
+            );
+            runtime
+                .configure(
+                    HumanPreferences {
+                        enabled: true,
+                        root: root.clone(),
+                        auto_refresh: true,
+                    },
+                    || Ok(()),
+                )
+                .unwrap();
+            wait_for(&runtime, |s| !s.busy && s.revision >= 1);
+            let first = runtime.status().last_success.unwrap();
+            wait_for(&runtime, |s| {
+                !s.busy && s.revision == 1 && s.last_success.is_some_and(|v| v > first)
+            });
+            assert_eq!(
+                runtime.status().revision,
+                1,
+                "unchanged check must not change data revision"
+            );
+        }
+        let saved: i64 = super::cache(&cache, true)
+            .unwrap()
+            .conn
+            .query_row("SELECT last_sync FROM human_activity_sources", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        std::fs::rename(root.join("storage.db"), root.join("offline.db")).unwrap();
+        let events = Arc::new(Mutex::new(Vec::<HumanSyncStatus>::new()));
+        let observed = events.clone();
+        let runtime = HumanRuntime::new(cache, tmp.path().join("stage"), move |s| {
+            lock(&observed).push(s)
+        });
+        let preferences = HumanPreferences {
+            enabled: true,
+            root: root.clone(),
+            auto_refresh: false,
+        };
+        runtime.configure(preferences.clone(), || Ok(())).unwrap();
+        wait_for(&runtime, |s| !s.busy && s.error.is_some());
+        assert_eq!(runtime.status().last_success, Some(saved));
+        assert!(runtime.status().next_auto_sync.is_none());
+        runtime
+            .configure(
+                HumanPreferences {
+                    auto_refresh: true,
+                    ..preferences
+                },
+                || Ok(()),
+            )
+            .unwrap();
+        assert!(
+            lock(&events).last().unwrap().next_auto_sync.is_some(),
+            "auto toggle must notify the UI"
+        );
+        assert_eq!(runtime.status().last_success, Some(saved));
+        let other = tmp.path().join("other");
+        std::fs::create_dir(&other).unwrap();
+        runtime
+            .configure(
+                HumanPreferences {
+                    enabled: true,
+                    root: other,
+                    auto_refresh: true,
+                },
+                || Ok(()),
+            )
+            .unwrap();
+        wait_for(&runtime, |s| !s.busy && s.error.is_some());
+        assert!(
+            runtime.status().last_success.is_none(),
+            "other root must not inherit timestamp"
+        );
+    }
+    #[test]
+    fn next_deadline_matches_actual_schedule_and_off_or_busy_has_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runtime = HumanRuntime::new(
+            tmp.path().join("cache.db"),
+            tmp.path().join("stage"),
+            |_| {},
+        );
+        let mut c = lock(&runtime.shared.control);
+        c.preferences.enabled = true;
+        c.preferences.auto_refresh = true;
+        c.last_finished = Some(Instant::now() - Duration::from_secs(1));
+        let now = chrono::Utc::now().timestamp_millis();
+        let deadline = status_snapshot(&c, runtime.shared.auto_interval)
+            .next_auto_sync
+            .unwrap();
+        assert!((now + 3_598_000..=now + 3_600_000).contains(&deadline));
+        c.status.busy = true;
+        assert!(status_snapshot(&c, runtime.shared.auto_interval)
+            .next_auto_sync
+            .is_none());
+        c.status.busy = false;
+        c.preferences.auto_refresh = false;
+        assert!(status_snapshot(&c, runtime.shared.auto_interval)
+            .next_auto_sync
+            .is_none());
+        c.preferences.auto_refresh = true;
+        c.force = true;
+        assert!(status_snapshot(&c, runtime.shared.auto_interval)
+            .next_auto_sync
+            .is_none());
+        c.force = false;
+        c.preferences.enabled = false;
+        assert!(status_snapshot(&c, runtime.shared.auto_interval)
+            .next_auto_sync
+            .is_none());
     }
     #[test]
     fn production_hour_boundary_and_manual_override() {

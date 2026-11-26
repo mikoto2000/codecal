@@ -254,9 +254,14 @@ fn selected_cache_is_available_before_reopening_or_rescanning_source() {
     receiver.recv_timeout(Duration::from_secs(2)).unwrap();
     let response = runtime.period(0, 10000);
     let bins = runtime.period_bands(0, 10000, "UTC");
+    let prior_success = runtime.status().last_success;
     barrier.wait();
     assert_eq!(response.unwrap().records.len(), 1);
     assert_eq!(bins.unwrap().bins.unwrap().len(), 1);
+    assert!(
+        prior_success.is_some(),
+        "cached timestamp must be available before the scan"
+    );
 }
 
 #[test]
