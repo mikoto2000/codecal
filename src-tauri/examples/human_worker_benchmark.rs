@@ -76,7 +76,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Vec::<(Instant, bool, u64, Option<String>)>::new(),
     ));
     let listener = events.clone();
-    let runtime = HumanRuntime::new(cache, tmp.path().join("stage"), move |s| {
+    let runtime = HumanRuntime::new_for_benchmark(cache, tmp.path().join("stage"), move |s| {
         listener
             .lock()
             .unwrap()
@@ -175,7 +175,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         concurrent_p95 <= baseline_p95 * 2.0 && concurrent_p95 - baseline_p95 <= 100.0;
     println!(
         "{}",
-        serde_json::json!({"rows":count,"initial_worker_ms":initial_ms,"forced_worker_ms":forced_ms,"unchanged_active_ms":unchanged,"unchanged_queue_ms":queue,"summary_ms":summary_ms,"summary_bytes":serde_json::to_vec(&summary)?.len(),"writer_baseline_samples":baseline.len(),"writer_baseline_p95_ms":baseline_p95,"writer_concurrent_samples":concurrent.len(),"writer_concurrent_p95_ms":concurrent_p95,"payload_bytes":payload.len(),"id_kind":"uuid","baseline_wal_peak_bytes":baseline_wal_peak,"concurrent_wal_peak_bytes":concurrent_wal_peak,"followup_caught_writes":runtime.status().revision>revision_before_followup,"writer_baseline_commit_ms":baseline,"writer_concurrent_commit_ms":concurrent,"writer_budget_pass":writer_budget_pass,"fixture_writer_truncated_wal_bytes":reclaimed_wal_bytes,"source_wal_bytes_after_read":wal_bytes,"writer_passive_checkpoint_after_read":checkpoint,"worker_revision":runtime.status().revision})
+        serde_json::json!({"auto_interval_ms":1000,"production_auto_interval_ms":3600000,"rows":count,"initial_worker_ms":initial_ms,"forced_worker_ms":forced_ms,"unchanged_active_ms":unchanged,"unchanged_queue_ms":queue,"summary_ms":summary_ms,"summary_bytes":serde_json::to_vec(&summary)?.len(),"writer_baseline_samples":baseline.len(),"writer_baseline_p95_ms":baseline_p95,"writer_concurrent_samples":concurrent.len(),"writer_concurrent_p95_ms":concurrent_p95,"payload_bytes":payload.len(),"id_kind":"uuid","baseline_wal_peak_bytes":baseline_wal_peak,"concurrent_wal_peak_bytes":concurrent_wal_peak,"followup_caught_writes":runtime.status().revision>revision_before_followup,"writer_baseline_commit_ms":baseline,"writer_concurrent_commit_ms":concurrent,"writer_budget_pass":writer_budget_pass,"fixture_writer_truncated_wal_bytes":reclaimed_wal_bytes,"source_wal_bytes_after_read":wal_bytes,"writer_passive_checkpoint_after_read":checkpoint,"worker_revision":runtime.status().revision})
     );
     if !writer_budget_pass {
         return Err("synthetic writer latency budget exceeded".into());

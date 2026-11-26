@@ -15,6 +15,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+const AUTO_SYNC_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
 #[derive(Clone, Default, Serialize)]
 pub struct HumanSyncStatus {
     pub generation: u64,
@@ -83,7 +85,6 @@ struct Control {
     status: HumanSyncStatus,
     pending: bool,
     force: bool,
-    requested: Instant,
     settled_epoch: u64,
 }
 struct Shared {
@@ -96,6 +97,7 @@ struct Shared {
     cache: PathBuf,
     staging: PathBuf,
     notify: Box<dyn Fn(HumanSyncStatus) + Send + Sync>,
+    auto_interval: Duration,
 }
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
@@ -125,10 +127,27 @@ pub struct HumanRuntime {
     worker: Option<JoinHandle<()>>,
 }
 impl HumanRuntime {
+    /// Synthetic benchmark only. Desktop always uses `new` with the hourly interval.
+    #[cfg(feature = "human-benchmark")]
+    pub fn new_for_benchmark(
+        cache: PathBuf,
+        staging: PathBuf,
+        notify: impl Fn(HumanSyncStatus) + Send + Sync + 'static,
+    ) -> Self {
+        Self::with_auto_interval(cache, staging, notify, Duration::from_secs(1))
+    }
     pub fn new(
         cache: PathBuf,
         staging: PathBuf,
         notify: impl Fn(HumanSyncStatus) + Send + Sync + 'static,
+    ) -> Self {
+        Self::with_auto_interval(cache, staging, notify, AUTO_SYNC_INTERVAL)
+    }
+    fn with_auto_interval(
+        cache: PathBuf,
+        staging: PathBuf,
+        notify: impl Fn(HumanSyncStatus) + Send + Sync + 'static,
+        auto_interval: Duration,
     ) -> Self {
         let shared = Arc::new(Shared {
             control: Mutex::new(Control {
@@ -139,7 +158,6 @@ impl HumanRuntime {
                 },
                 pending: false,
                 force: false,
-                requested: Instant::now(),
                 settled_epoch: 1,
             }),
             wake: Condvar::new(),
@@ -150,6 +168,7 @@ impl HumanRuntime {
             cache,
             staging,
             notify: Box::new(notify),
+            auto_interval,
         });
         let state = shared.clone();
         let worker = std::thread::spawn(move || run(state));
@@ -180,7 +199,9 @@ impl HumanRuntime {
             };
             control.pending = preferences.enabled;
             control.force = preferences.enabled;
-            control.requested = Instant::now();
+        }
+        if !preferences.auto_refresh && !control.force {
+            control.pending = false;
         }
         control.preferences = preferences;
         self.shared.wake.notify_all();
@@ -190,9 +211,6 @@ impl HumanRuntime {
         let mut control = lock(&self.shared.control);
         if !control.preferences.enabled || (!force && !control.preferences.auto_refresh) {
             return;
-        }
-        if !control.pending {
-            control.requested = Instant::now();
         }
         control.pending = true;
         control.force |= force;
@@ -425,12 +443,16 @@ impl Drop for HumanRuntime {
         }
     }
 }
+fn sync_ready(control: &Control, elapsed: Duration, interval: Duration) -> bool {
+    control.preferences.enabled
+        && control.pending
+        && (control.force || (control.preferences.auto_refresh && elapsed >= interval))
+}
 fn run(shared: Arc<Shared>) {
     let mut reader: Option<HumanReader> = None;
     let mut version = None;
     let mut epoch = 1;
-    let mut last_finished = Instant::now() - Duration::from_secs(30);
-    let mut last_check = Instant::now();
+    let mut last_finished = Instant::now();
     loop {
         let mut control = lock(&shared.control);
         if shared.stopping.load(Ordering::SeqCst) {
@@ -446,18 +468,11 @@ fn run(shared: Arc<Shared>) {
         }
         if control.preferences.enabled
             && control.preferences.auto_refresh
-            && last_check.elapsed() >= Duration::from_secs(30)
+            && last_finished.elapsed() >= shared.auto_interval
         {
-            if !control.pending {
-                control.requested = Instant::now() - Duration::from_secs(1);
-            }
             control.pending = true;
         }
-        let ready = control.preferences.enabled
-            && control.pending
-            && (control.force
-                || (control.requested.elapsed() >= Duration::from_millis(600)
-                    && last_finished.elapsed() >= Duration::from_secs(1)));
+        let ready = sync_ready(&control, last_finished.elapsed(), shared.auto_interval);
         if !ready {
             drop(
                 shared
@@ -539,9 +554,189 @@ fn run(shared: Arc<Shared>) {
         control.status.busy = false;
         let status = control.status.clone();
         last_finished = Instant::now();
-        last_check = Instant::now();
         shared.wake.notify_all();
         drop(control);
         (shared.notify)(status);
+    }
+}
+
+#[cfg(test)]
+mod schedule_tests {
+    use super::*;
+    fn source(path: &Path, seconds: i64) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT)",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO activity_records VALUES('synthetic',1000,?)",
+            [serde_json::json!({"durationEstimate":seconds}).to_string()],
+        )
+        .unwrap();
+    }
+    fn wait_for(runtime: &HumanRuntime, condition: impl Fn(&HumanSyncStatus) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !condition(&runtime.status()) {
+            assert!(Instant::now() < deadline, "worker did not settle");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    #[test]
+    fn production_hour_boundary_and_manual_override() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runtime = HumanRuntime::new(
+            tmp.path().join("cache.db"),
+            tmp.path().join("stage"),
+            |_| {},
+        );
+        assert_eq!(runtime.shared.auto_interval, Duration::from_secs(3600));
+        let mut c = lock(&runtime.shared.control);
+        c.preferences.enabled = true;
+        c.preferences.auto_refresh = true;
+        c.pending = true;
+        assert!(!sync_ready(
+            &c,
+            Duration::from_millis(3_599_999),
+            runtime.shared.auto_interval
+        ));
+        assert!(sync_ready(
+            &c,
+            Duration::from_secs(3600),
+            runtime.shared.auto_interval
+        ));
+        c.preferences.auto_refresh = false;
+        assert!(!sync_ready(
+            &c,
+            Duration::from_secs(7200),
+            runtime.shared.auto_interval
+        ));
+        c.force = true;
+        assert!(sync_ready(&c, Duration::ZERO, runtime.shared.auto_interval));
+        c.preferences.enabled = false;
+        assert!(!sync_ready(
+            &c,
+            Duration::from_secs(7200),
+            runtime.shared.auto_interval
+        ));
+        c.pending = false;
+        c.force = false;
+    }
+    #[test]
+    fn notifications_during_sync_wait_for_next_hour_but_manual_can_override() {
+        use std::sync::{mpsc, Arc, Barrier};
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("cache.db");
+        drop(Store::open(&cache).unwrap());
+        let root = tmp.path().join("source");
+        std::fs::create_dir(&root).unwrap();
+        source(&root.join("storage.db"), 1);
+        let barrier = Arc::new(Barrier::new(2));
+        let worker_barrier = barrier.clone();
+        let once = AtomicBool::new(true);
+        let (send, receive) = mpsc::channel();
+        let runtime = HumanRuntime::new(cache, tmp.path().join("stage"), move |s| {
+            if s.busy && once.swap(false, Ordering::SeqCst) {
+                send.send(()).unwrap();
+                worker_barrier.wait();
+            }
+        });
+        runtime
+            .configure(
+                HumanPreferences {
+                    enabled: true,
+                    root,
+                    auto_refresh: true,
+                },
+                || Ok(()),
+            )
+            .unwrap();
+        receive.recv_timeout(Duration::from_secs(5)).unwrap();
+        for _ in 0..100 {
+            runtime.request(false);
+        }
+        barrier.wait();
+        wait_for(&runtime, |s| !s.busy && s.revision >= 1);
+        {
+            let c = lock(&runtime.shared.control);
+            assert!(c.pending);
+            assert!(!sync_ready(
+                &c,
+                Duration::ZERO,
+                runtime.shared.auto_interval
+            ));
+        }
+        runtime.request(true);
+        wait_for(&runtime, |s| !s.busy && s.revision >= 2);
+    }
+    #[test]
+    fn periodic_retry_without_notifications_recovers_missing_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("cache.db");
+        drop(Store::open(&cache).unwrap());
+        let root = tmp.path().join("source");
+        std::fs::create_dir(&root).unwrap();
+        let runtime = HumanRuntime::with_auto_interval(
+            cache,
+            tmp.path().join("stage"),
+            |_| {},
+            Duration::from_millis(150),
+        );
+        runtime
+            .configure(
+                HumanPreferences {
+                    enabled: true,
+                    root: root.clone(),
+                    auto_refresh: true,
+                },
+                || Ok(()),
+            )
+            .unwrap();
+        wait_for(&runtime, |s| !s.busy && s.error.is_some());
+        source(&root.join("storage.db"), 2);
+        wait_for(&runtime, |s| !s.busy && s.revision >= 1);
+        assert!(runtime.status().error.is_none());
+        assert_eq!(runtime.period(0, 10000).unwrap().records[0].end, 3000);
+    }
+    #[test]
+    fn scheduled_check_reopens_switched_file_and_auto_off_discards_pending() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("cache.db");
+        drop(Store::open(&cache).unwrap());
+        let root = tmp.path().join("source");
+        std::fs::create_dir(&root).unwrap();
+        source(&root.join("memory.db"), 1);
+        let runtime = HumanRuntime::with_auto_interval(
+            cache,
+            tmp.path().join("stage"),
+            |_| {},
+            Duration::from_millis(500),
+        );
+        let preferences = HumanPreferences {
+            enabled: true,
+            root: root.clone(),
+            auto_refresh: true,
+        };
+        runtime.configure(preferences.clone(), || Ok(())).unwrap();
+        wait_for(&runtime, |s| !s.busy && s.revision >= 1);
+        for _ in 0..100 {
+            runtime.request(false);
+        }
+        runtime
+            .configure(
+                HumanPreferences {
+                    auto_refresh: false,
+                    ..preferences.clone()
+                },
+                || Ok(()),
+            )
+            .unwrap();
+        assert!(!lock(&runtime.shared.control).pending);
+        assert!(runtime.wait_idle(Duration::from_secs(5)));
+        assert_eq!(runtime.status().revision, 1);
+        source(&root.join("storage.db"), 3);
+        runtime.configure(preferences, || Ok(())).unwrap();
+        wait_for(&runtime, |s| !s.busy && s.revision >= 2);
+        assert_eq!(runtime.period(0, 10000).unwrap().records[0].end, 4000);
     }
 }

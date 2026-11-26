@@ -71,6 +71,8 @@ fn storage_observations_take_priority_and_switch_reset_the_retained_reader_and_v
     synced(&runtime, 1);
     observation(&tmp.path().join("storage.db"), 7);
     runtime.request(false);
+    assert!(!runtime.wait_idle(Duration::from_millis(50)));
+    runtime.request(true);
     synced(&runtime, 2);
     let records = runtime.period(0, 10000).unwrap().records;
     assert_eq!(records.len(), 1);
