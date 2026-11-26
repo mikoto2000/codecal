@@ -53,7 +53,7 @@ DB内の `settings.config` が不正なJSONまたは無効な設定なら、起�
 | human_activity_sources | source_id PK（32byte digest BLOB）、source_path（選択した論理絶対パス、内部のみ）、file_identity、reader_version、last_sync、sync_status、diagnostics（固定コードと件数のみ） |
 | human_activity_records | source_id FK / native_id の複合PK、captured_at（UTC ms）、duration_ms、kind（3種別）、content_hash（32byte digest BLOB）、effective_end（非代表の同時刻観測はNULL）           |
 
-`human_activity_records` は WITHOUT ROWID とし、`(source_id,captured_at,native_id)`、`(source_id,effective_end)` に索引を持ちます。
+`human_activity_records` は WITHOUT ROWID とし、`(source_id,captured_at,native_id,duration_ms,effective_end,kind)` に期間集計用の被覆索引を持ちます。ハッシュは本体にだけ保持し、種別集計では読みません。使用しない終了時刻索引は削除しました。v4の行形式とuser_versionは維持し、既存v4の旧索引・欠落索引は書き込みロック下のtransactionで修復します。正しい索引を再オープンのたびに作り直しません。
 判定文字列・元JSON・画面や活動の具体的内容は保存しません。ハッシュは native_id、開始、推定継続時間、正規化種別だけから生成します。
 ソースごとの区間確定をキャッシュ反映と同じトランザクションで行い、削除された観測・不正更新の前回正常値は保持します。
 変更が少ない場合は変更時刻と直前の観測だけを再計算し、大量更新時は開始索引を順に読みます。

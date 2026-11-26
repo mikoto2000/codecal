@@ -42,6 +42,59 @@ fn disabled_runtime_never_opens_missing_source_and_refuses_periods() {
 }
 
 #[test]
+fn unidentifiable_existing_source_never_displays_the_old_physical_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache.db");
+    drop(Store::open(&cache).unwrap());
+    let root = tmp.path().join("source");
+    source(&root);
+    let runtime = HumanRuntime::new(cache.clone(), tmp.path().join("staging"), |_| {});
+    let preferences = HumanPreferences {
+        enabled: true,
+        root: root.clone(),
+        auto_refresh: false,
+    };
+    runtime.configure(preferences.clone(), || Ok(())).unwrap();
+    synced(&runtime, 1);
+    runtime
+        .configure(
+            HumanPreferences {
+                enabled: false,
+                ..preferences.clone()
+            },
+            || Ok(()),
+        )
+        .unwrap();
+    assert!(runtime.wait_idle(Duration::from_secs(3)));
+    std::fs::rename(root.join("storage.db"), root.join("old-source.db")).unwrap();
+    std::fs::create_dir(root.join("storage.db")).unwrap();
+    runtime.configure(preferences, || Ok(())).unwrap();
+    assert!(runtime.wait_idle(Duration::from_secs(3)));
+    assert!(
+        runtime
+            .period(0, 10000)
+            .map(|v| v.records.is_empty())
+            .unwrap_or(true),
+        "old physical source was displayed"
+    );
+    assert!(
+        runtime
+            .summary(0, 10000, "UTC", &[])
+            .map(|v| v.days.is_empty())
+            .unwrap_or(true),
+        "old physical source was summarized"
+    );
+    let cached = rusqlite::Connection::open(cache).unwrap();
+    assert_eq!(
+        cached
+            .query_row("SELECT count(*) FROM human_activity_records", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
 fn human_only_syncs_without_agent_events_and_off_retains_cache() {
     let tmp = tempfile::tempdir().unwrap();
     let cache = tmp.path().join("cache.db");

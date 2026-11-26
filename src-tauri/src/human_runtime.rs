@@ -106,7 +106,7 @@ fn cache(path: &Path, read_only: bool) -> Result<Store, String> {
         if read_only {
             OpenFlags::SQLITE_OPEN_READ_ONLY
         } else {
-            OpenFlags::SQLITE_OPEN_READ_WRITE
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI
         },
     )
     .map_err(|_| "cache_open_failed")?;
@@ -349,6 +349,11 @@ fn selected_source(store: &Store, path: &Path) -> Result<Option<String>, String>
     match crate::rei_human::source_identity(path) {
         Ok(id) => Ok(Some(id)),
         Err(_) => {
+            // Only a missing path can use its retained logical-source cache.
+            // An existing object with unknown identity may be a replacement.
+            if !matches!(path.try_exists(), Ok(false)) {
+                return Err("source_unavailable".into());
+            }
             let logical = crate::rei_human::logical_source_path(path).map_err(|e| e.to_string())?;
             store.conn.query_row("SELECT CASE WHEN typeof(source_id)='blob' THEN lower(hex(source_id)) ELSE source_id END FROM human_activity_sources WHERE source_path=? ORDER BY last_sync DESC,source_id DESC LIMIT 1", [&logical], |r| r.get::<_,String>(0)).optional().map_err(|_| "cache_read_failed".into())
         }

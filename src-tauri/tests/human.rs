@@ -3,6 +3,18 @@ use codecal_lib::store::Store;
 use rusqlite::Connection;
 
 #[test]
+fn a_composite_primary_key_cannot_replace_unique_native_observation_ids() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("unknown-source.db");
+    let writer = Connection::open(&path).unwrap();
+    writer.execute_batch("CREATE TABLE activity_records(id TEXT,captured_at INTEGER,payload TEXT,PRIMARY KEY(id,captured_at)); INSERT INTO activity_records VALUES('duplicate',1000,'{\"durationEstimate\":1}'),('duplicate',2000,'{\"durationEstimate\":1}');").unwrap();
+    let error = HumanReader::open(&path)
+        .err()
+        .expect("unknown schema must be rejected before reading records");
+    assert_eq!(error.to_string(), "unsupported_source");
+}
+
+#[test]
 fn new_database_has_separate_human_cache_schema() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("codecal.db");
@@ -796,7 +808,7 @@ fn failed_large_first_import_restores_indexes_and_an_empty_cache_before_retry() 
             .to_string(),
         "cache_write_failed"
     );
-    assert_eq!(conn.query_row("SELECT count(*) FROM sqlite_master WHERE type='index' AND name IN ('human_activity_start','human_activity_end')",[],|r|r.get::<_,i64>(0)).unwrap(),2);
+    assert_eq!(conn.query_row("SELECT count(*) FROM sqlite_master WHERE type='index' AND name IN ('human_activity_start','human_activity_end')",[],|r|r.get::<_,i64>(0)).unwrap(),1);
     assert_eq!(
         conn.query_row("SELECT count(*) FROM human_activity_records", [], |r| r
             .get::<_, i64>(0))

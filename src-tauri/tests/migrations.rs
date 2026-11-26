@@ -8,6 +8,67 @@ fn version(path: &Path) -> i64 {
         .unwrap()
 }
 #[test]
+fn repairs_legacy_or_missing_v4_period_index_without_losing_data_or_rebuilding_again() {
+    for legacy_index in [true, false] {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("cache.db");
+        drop(Store::open(&path).unwrap());
+        let c = Connection::open(&path).unwrap();
+        c.execute_batch("INSERT INTO projects VALUES('p','/fixture','Fixture','#123456',1000);
+          INSERT INTO human_activity_sources VALUES(zeroblob(32),'synthetic','physical',1,1000,'synced','[]');
+          INSERT INTO human_activity_records VALUES(zeroblob(32),'fixture',1000,1000,'entertainment',zeroblob(32),2000);
+          DROP INDEX human_activity_start;").unwrap();
+        if legacy_index {
+            c.execute_batch("CREATE INDEX human_activity_start ON human_activity_records(source_id,captured_at,native_id);").unwrap();
+        }
+        drop(c);
+        drop(Store::open(&path).unwrap());
+        let c = Connection::open(&path).unwrap();
+        let names = c
+            .prepare("PRAGMA index_info(human_activity_start)")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(2))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            names,
+            [
+                "source_id",
+                "captured_at",
+                "native_id",
+                "duration_ms",
+                "effective_end",
+                "kind"
+            ]
+        );
+        assert_eq!(c.query_row("SELECT count(*) FROM sqlite_master WHERE type='index' AND name='human_activity_end'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        assert_eq!(version(&path), 4);
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM projects", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM human_activity_records", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        let schema: i64 = c
+            .pragma_query_value(None, "schema_version", |r| r.get(0))
+            .unwrap();
+        drop(c);
+        drop(Store::open(&path).unwrap());
+        let c = Connection::open(&path).unwrap();
+        assert_eq!(
+            c.pragma_query_value(None, "schema_version", |r| r.get::<_, i64>(0))
+                .unwrap(),
+            schema
+        );
+    }
+}
+#[test]
 fn opens_known_legacy_v3_without_losing_history_settings_or_claude_cache() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("old.db");

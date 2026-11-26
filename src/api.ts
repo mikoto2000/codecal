@@ -46,9 +46,10 @@ export const api = {
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     }),
   snapshot: (timezone: string) => invoke<Snapshot>("snapshot", { timezone }),
-  sync: () =>
+  sync: (human = true) =>
     invoke<{ files: number; bytes_read: number; warnings: string[] }>(
       "sync_logs",
+      { human },
     ),
   save: (value: Config) => invoke<string[]>("save_config", { value }),
   project: (id: string, name: string, color: string) =>

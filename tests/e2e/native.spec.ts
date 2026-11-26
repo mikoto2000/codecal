@@ -710,6 +710,326 @@ test("human month: dense observations, independent bars and filtered day records
   }
 });
 
+test("human performance: native synchronization keeps navigation responsive without external requests", async () => {
+  test.setTimeout(180000);
+  mkdirSync(path.join(logs, "sessions"), { recursive: true });
+  const humanRoot = path.join(root, "human-performance");
+  mkdirSync(humanRoot, { recursive: true });
+  const db = new DatabaseSync(path.join(humanRoot, "storage.db"));
+  const rows = Number(globalThis.process.env.CODECAL_NATIVE_PERF_ROWS ?? 10000);
+  expect([10000, 100000, 1000000]).toContain(rows);
+  const captured = Date.parse("2026-11-01T00:00:00Z");
+  const marker = "PRIVATE_NATIVE_PERFORMANCE_CONTENT";
+  const payload = JSON.stringify({
+    durationEstimate: 60,
+    foreground: { title: marker },
+    detection: {
+      diagnostics: { entertainmentDisposition: "NON_ENTERTAINMENT" },
+    },
+  });
+  db.exec(
+    "PRAGMA journal_mode=WAL; CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT); BEGIN",
+  );
+  const insert = db.prepare("INSERT INTO activity_records VALUES(?,?,?)");
+  for (let i = 0; i < rows; i++)
+    insert.run(
+      `synthetic-${String(i).padStart(12, "0")}`,
+      captured + i * 60000,
+      payload,
+    );
+  db.exec("COMMIT");
+  const external: string[] = [];
+  const memoryReady = path.join(root, "memory-ready");
+  const memoryStop = path.join(root, "memory-stop");
+  const memoryResult = path.join(root, "memory-result.json");
+  let memoryMonitor: ChildProcess | undefined;
+  let memoryError = "";
+  try {
+    await launch();
+    const mainMemory = () =>
+      JSON.parse(
+        execFileSync(
+          "powershell.exe",
+          [
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            `$p=Get-Process -Id ${process.pid}; if ($p.Path -ne '${exe.replaceAll("'", "''")}') { throw 'Unexpected test process' }; $info=Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId; $owned=[Collections.Generic.List[int]]::new(); $owned.Add(${process.pid}); for($i=0;$i -lt $owned.Count;$i++){foreach($child in $info){if($child.ParentProcessId -eq $owned[$i] -and -not $owned.Contains([int]$child.ProcessId)){$owned.Add([int]$child.ProcessId)}}}; [long]$working=0; [long]$peak=0; foreach($member in $owned){$child=Get-Process -Id $member -ErrorAction SilentlyContinue;if($child -and $child.StartTime -ge $p.StartTime){$working+=$child.WorkingSet64;$peak+=$child.PeakWorkingSet64}}; @{working_set_bytes=$p.WorkingSet64;peak_working_set_bytes=$p.PeakWorkingSet64;tree_working_set_bytes=$working;tree_peak_sum_bytes=$peak}|ConvertTo-Json -Compress`,
+          ],
+          { encoding: "utf8", windowsHide: true },
+        ),
+      ) as {
+        working_set_bytes: number;
+        peak_working_set_bytes: number;
+        tree_working_set_bytes: number;
+        tree_peak_sum_bytes: number;
+      };
+    const baselineMemory = mainMemory();
+    memoryMonitor = spawn(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        path.resolve("scripts/measure-native-memory.ps1"),
+        "-ParentProcessId",
+        String(process.pid),
+        "-ExpectedExecutable",
+        exe,
+        "-ReadyFile",
+        memoryReady,
+        "-StopFile",
+        memoryStop,
+        "-ResultFile",
+        memoryResult,
+      ],
+      { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] },
+    );
+    memoryMonitor.on("error", (error) => {
+      memoryError = error.message;
+    });
+    memoryMonitor.stderr?.on("data", (chunk) => {
+      memoryError = (memoryError + String(chunk)).slice(-2048);
+    });
+    await expect
+      .poll(() => {
+        if (memoryError || memoryMonitor?.exitCode !== null)
+          throw new Error(`Native memory monitor failed: ${memoryError}`);
+        return existsSync(memoryReady);
+      })
+      .toBe(true);
+    const ipc = <T>(command: string, args: Record<string, unknown> = {}) =>
+      page.evaluate(
+        ({ command, args }) =>
+          (
+            window as unknown as {
+              __TAURI_INTERNALS__: {
+                invoke: (
+                  command: string,
+                  args: Record<string, unknown>,
+                ) => Promise<unknown>;
+              };
+            }
+          ).__TAURI_INTERNALS__.invoke(command, args),
+        { command, args },
+      ) as Promise<T>;
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (
+        ["http:", "https:"].includes(url.protocol) &&
+        !["tauri.localhost", "ipc.localhost"].includes(url.hostname)
+      )
+        external.push(url.origin);
+    });
+    await ipc("clear_human_activity", { all: true });
+    await page.getByRole("button", { name: "設定", exact: true }).click();
+    await page.getByLabel("れいの AI 実行履歴を取り込む").uncheck();
+    await page.getByLabel("人間のアクティビティ機能を有効にする").check();
+    await page.getByLabel("れい データディレクトリ").fill(humanRoot);
+    const began = Date.now();
+    await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+    await expect
+      .poll(
+        async () =>
+          (await ipc<{ busy: boolean; revision: number }>("human_status"))
+            .busy ||
+          (await ipc<{ revision: number }>("human_status")).revision > 0,
+      )
+      .toBe(true);
+    const navigationResult = await page.evaluate(async () => {
+      const samples: number[] = [];
+      let duringSync = 0;
+      for (let i = 0; i < 30; i++) {
+        const host = window as unknown as {
+          __TAURI_INTERNALS__: {
+            invoke: (command: string) => Promise<{ busy: boolean }>;
+          };
+        };
+        if ((await host.__TAURI_INTERNALS__.invoke("human_status")).busy)
+          duringSync++;
+        const date = document.querySelector(
+          'input[aria-label="表示日"]',
+        ) as HTMLInputElement;
+        const previous = date.value;
+        const start = performance.now();
+        (
+          document.querySelector(
+            `button[aria-label="${i % 2 ? "前へ" : "次へ"}"]`,
+          ) as HTMLButtonElement
+        ).click();
+        await new Promise<void>((resolve, reject) => {
+          const changed = () => {
+            if (
+              date.value !== previous &&
+              document.querySelector("main")?.getAttribute("aria-busy") ===
+                "false"
+            )
+              resolve();
+            else if (performance.now() - start > 5000)
+              reject(new Error("Native date navigation did not finish"));
+            else requestAnimationFrame(changed);
+          };
+          requestAnimationFrame(changed);
+        });
+        samples.push(performance.now() - start);
+      }
+      return { samples: samples.sort((a, b) => a - b), duringSync };
+    });
+    const navigation = navigationResult.samples;
+    await expect
+      .poll(
+        async () =>
+          await ipc<{ busy: boolean; error: string | null }>("human_status"),
+        { timeout: 40000 },
+      )
+      .toMatchObject({ busy: false, error: null });
+    const elapsed = Date.now() - began;
+    writeFileSync(memoryStop, "stop");
+    await expect.poll(() => memoryMonitor?.exitCode).toBe(0);
+    const syncMemory = JSON.parse(
+      readFileSync(memoryResult, "utf8").replace(/^\uFEFF/, ""),
+    ) as { observed_tree_rss_increment_bytes: number; [key: string]: unknown };
+    const status = await ipc<{ revision: number }>("human_status");
+    expect(status.revision).toBe(1);
+    const summaryStart = Date.now();
+    const summary = await ipc<HumanSummaryResponse>("human_summary", {
+      from: captured,
+      to: captured + 42 * 86400000,
+      timezone: "UTC",
+      visible: ["entertainment", "non_entertainment", "unknown"],
+    });
+    const summaryMs = Date.now() - summaryStart;
+    expect(summary.days.length).toBeLessThanOrEqual(43);
+    expect(JSON.stringify(summary)).not.toContain(marker);
+    const periodIpc = await page.evaluate(
+      async ({ captured, marker }) => {
+        const host = window as unknown as {
+          __TAURI_INTERNALS__: {
+            invoke: (
+              command: string,
+              args: Record<string, unknown>,
+            ) => Promise<unknown>;
+          };
+        };
+        const periods: Record<
+          string,
+          { samples_ms: number[]; p95_ms: number; response_bytes: number }
+        > = {};
+        for (const [name, days] of [
+          ["day", 1],
+          ["week", 7],
+          ["month", 42],
+        ] as const) {
+          const samples: number[] = [];
+          let bytes = 0;
+          for (let repeat = 0; repeat < 5; repeat++) {
+            const start = performance.now();
+            const result = await host.__TAURI_INTERNALS__.invoke(
+              name === "month" ? "human_summary" : "human_activity",
+              name === "month"
+                ? {
+                    from: captured,
+                    to: captured + days * 86400000,
+                    timezone: "UTC",
+                    visible: ["entertainment", "non_entertainment", "unknown"],
+                  }
+                : {
+                    from: captured,
+                    to: captured + days * 86400000,
+                    grouped: false,
+                    timezone: "UTC",
+                  },
+            );
+            samples.push(performance.now() - start);
+            const wire = JSON.stringify(result);
+            if (wire.includes(marker))
+              throw new Error("Private synthetic marker entered IPC");
+            bytes = Math.max(bytes, new TextEncoder().encode(wire).length);
+            if (bytes >= 8 * 1024 * 1024)
+              throw new Error("IPC payload budget exceeded");
+          }
+          samples.sort((a, b) => a - b);
+          periods[name] = {
+            samples_ms: samples,
+            p95_ms: samples[Math.ceil(samples.length * 0.95) - 1],
+            response_bytes: bytes,
+          };
+        }
+        return periods;
+      },
+      { captured, marker },
+    );
+    await page.getByRole("button", { name: "日", exact: true }).click();
+    await page.getByLabel("表示日").fill("2026-11-01");
+    await expect(page.locator(".human-block")).toHaveCount(1);
+    await page.locator(".human-block").click();
+    await expect(
+      page.getByRole("dialog", { name: "人間のアクティビティ（推定）" }),
+    ).not.toContainText(marker);
+    await page.keyboard.press("Escape");
+    expect(external).toEqual([]);
+    const memory = mainMemory();
+    const metrics = {
+      rows,
+      sync_memory: syncMemory,
+      initial_worker_and_ui_ms: elapsed,
+      navigation_samples_ms: navigation,
+      navigation_during_sync: navigationResult.duringSync,
+      navigation_p95_ms: navigation[Math.ceil(navigation.length * 0.95) - 1],
+      summary_ipc_ms: summaryMs,
+      summary_ipc_bytes: Buffer.byteLength(JSON.stringify(summary)),
+      period_ipc: periodIpc,
+      external_requests: external.length,
+      main_process_baseline_rss: baselineMemory.working_set_bytes,
+      main_process_peak_rss: memory.peak_working_set_bytes,
+      main_process_rss_increment: Math.max(
+        0,
+        memory.peak_working_set_bytes - baselineMemory.working_set_bytes,
+      ),
+      tree_baseline_rss: baselineMemory.tree_working_set_bytes,
+      tree_peak_sum_rss: memory.tree_peak_sum_bytes,
+      tree_rss_increment: Math.max(
+        0,
+        memory.tree_peak_sum_bytes - baselineMemory.tree_working_set_bytes,
+      ),
+      memory_scope:
+        "Tauri main plus live descendants, including WebView2; sum of each process peak is conservative for live processes; exited transient subprocesses are excluded",
+    };
+    mkdirSync("test-results", { recursive: true });
+    writeFileSync(
+      path.join("test-results", `human-native-performance-${rows}.json`),
+      JSON.stringify(metrics, null, 2),
+    );
+    console.info("Synthetic human native performance", JSON.stringify(metrics));
+    if (globalThis.process.env.CODECAL_ENFORCE_PERF === "1") {
+      expect(metrics.navigation_p95_ms).toBeLessThanOrEqual(100);
+      expect(metrics.navigation_during_sync).toBeGreaterThan(0);
+      expect(periodIpc.day.p95_ms).toBeLessThanOrEqual(100);
+      expect(periodIpc.week.p95_ms).toBeLessThanOrEqual(200);
+      expect(periodIpc.month.p95_ms).toBeLessThanOrEqual(500);
+      expect(metrics.main_process_rss_increment).toBeLessThanOrEqual(
+        128 * 1024 * 1024,
+      );
+      expect(syncMemory.observed_tree_rss_increment_bytes).toBeLessThanOrEqual(
+        128 * 1024 * 1024,
+      );
+    }
+    await expect(page.locator("body")).not.toContainText(marker);
+    await page.getByRole("button", { name: "設定", exact: true }).click();
+    await page.getByLabel("人間のアクティビティ機能を有効にする").uncheck();
+    await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+    await ipc("clear_human_activity", { all: true });
+  } finally {
+    writeFileSync(memoryStop, "stop");
+    db.close();
+    await stop();
+    if (memoryMonitor && memoryMonitor.exitCode === null)
+      await new Promise<void>((resolve) =>
+        memoryMonitor!.once("exit", () => resolve()),
+      );
+  }
+});
+
 test("native Tauri: import, calendars, detail, watch append and restart SQLite", async () => {
   // Includes a 35-second watcher reconciliation allowance and native restarts.
   test.setTimeout(120000);

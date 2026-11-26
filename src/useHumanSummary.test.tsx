@@ -105,3 +105,44 @@ it("retains prefilter hours during a filter request but removes them on source c
   expect(result.current.unfilteredDays).toEqual([]);
   await act(async () => pending.resolve({ days: [], diagnostics: [] }));
 });
+it("discards successful prefilter days after a failed current-source fetch and does not revive them on retry", async () => {
+  let changed!: Parameters<typeof api.humanEvents>[0];
+  vi.mocked(api.humanEvents).mockImplementation(async (listener) => {
+    changed = listener;
+    return () => {};
+  });
+  vi.mocked(api.humanSync).mockResolvedValue(undefined);
+  const response: HumanSummaryResponse = {
+    days: [
+      {
+        date: "1970-01-01",
+        day_length_ms: 86_400_000,
+        total_ms: 1000,
+        kinds: { entertainment: 1000, non_entertainment: 0, unknown: 0 },
+        observed: ["entertainment"],
+      },
+    ],
+    diagnostics: [],
+  };
+  const pending = deferred<HumanSummaryResponse>();
+  vi.mocked(api.humanSummary)
+    .mockResolvedValueOnce(response)
+    .mockRejectedValueOnce("source_unavailable")
+    .mockReturnValue(pending.promise);
+  const { result } = renderHook(() => useHumanSummary(options));
+  await waitFor(() => expect(result.current.unfilteredDays).toHaveLength(1));
+  await act(async () =>
+    changed({
+      generation: 3,
+      revision: 1,
+      busy: false,
+      error: "source_unavailable",
+      last_success: 1000,
+    }),
+  );
+  await waitFor(() => expect(result.current.error).toBe("source_unavailable"));
+  expect(result.current.unfilteredDays).toEqual([]);
+  act(() => result.current.retry());
+  expect(result.current.unfilteredDays).toEqual([]);
+  await act(async () => pending.resolve({ days: [], diagnostics: [] }));
+});

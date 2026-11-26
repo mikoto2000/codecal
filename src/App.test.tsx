@@ -109,6 +109,13 @@ const mount = async () => {
   render(<App initialDate="2026-11-20" />);
   await screen.findByRole("button", { name: /Sample project.*10:00/ });
 };
+it("avoids a second forced human scan at startup but refreshes it on manual sync", async () => {
+  await mount();
+  await screen.findByText("同期済み");
+  expect(api.sync).toHaveBeenLastCalledWith(false);
+  fireEvent.click(screen.getByRole("button", { name: /同期/ }));
+  await waitFor(() => expect(api.sync).toHaveBeenLastCalledWith(true));
+});
 const humanRecords: HumanActivity[] = [
   {
     start: Date.parse("2026-11-20T10:30Z"),
