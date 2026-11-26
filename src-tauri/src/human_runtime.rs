@@ -279,9 +279,11 @@ impl HumanRuntime {
             && if all {
                 purge_staging(&self.shared.staging, None)
             } else {
-                prefixes.iter().fold(true, |complete, prefix| {
-                    purge_staging(&self.shared.staging, Some(prefix)) && complete
-                })
+                let mut complete = true;
+                for prefix in &prefixes {
+                    complete &= purge_staging(&self.shared.staging, Some(prefix));
+                }
+                complete
             };
         let compacted = store.conn.execute_batch("VACUUM;").is_ok()
             && store

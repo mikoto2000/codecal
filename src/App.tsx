@@ -908,7 +908,13 @@ export default function App({ initialDate }: { initialDate?: string }) {
               <p role="alert">
                 {humanState.error === "period_too_dense"
                   ? "この期間の人間の記録が多すぎます。まとめ表示または短い期間に変更してください。"
-                  : "人間のアクティビティを読み取れません。設定または原本を確認して再試行してください。"}
+                  : (humanState.error || humanState.status.error) ===
+                      "unsupported_source"
+                    ? "対応する人間の観測テーブルが見つかりません。れいのデータディレクトリと記録の保存形式を確認してください。"
+                    : (humanState.error || humanState.status.error) ===
+                        "source_unavailable"
+                      ? "人間のアクティビティの保存先を開けません。れいのデータディレクトリと読み取り権限を確認してください。"
+                      : "人間のアクティビティを読み取れません。設定または原本を確認して再試行してください。"}
               </p>
             )}
             {humanState.diagnostics.length > 0 && (

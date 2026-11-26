@@ -21,12 +21,15 @@ import type {
   Snapshot,
 } from "../../src/types";
 
-test("human settings: isolated IPC, WAL updates, OFF restart and confirmed cache clear", async () => {
+test("human settings: legacy memory database, isolated IPC, WAL updates, OFF restart and confirmed cache clear", async () => {
   test.setTimeout(120000);
   mkdirSync(path.join(logs, "sessions"), { recursive: true });
   const humanRoot = path.join(root, "human-only");
   mkdirSync(humanRoot, { recursive: true });
-  const db = new DatabaseSync(path.join(humanRoot, "storage.db"));
+  const aiDatabase = new DatabaseSync(path.join(humanRoot, "storage.db"));
+  aiDatabase.exec("CREATE TABLE agent_events(sequence INTEGER)");
+  aiDatabase.close();
+  const db = new DatabaseSync(path.join(humanRoot, "memory.db"));
   const marker = "PRIVATE_NATIVE_HUMAN_CONTENT";
   const captured = Date.parse("2026-11-20T01:00:00Z");
   db.exec(
@@ -72,6 +75,9 @@ test("human settings: isolated IPC, WAL updates, OFF restart and confirmed cache
     await page.getByLabel("人間のアクティビティ機能を有効にする").check();
     await page.getByLabel("れい データディレクトリ").fill(humanRoot);
     await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+    await expect(
+      page.getByRole("dialog", { name: "設定", exact: true }),
+    ).not.toBeVisible();
     await expect.poll(async () => (await period()).records.length).toBe(1);
     const response = await period();
     expect(response.records[0]).toEqual({
@@ -549,6 +555,9 @@ test("human month: dense observations, independent bars and filtered day records
     await page.getByLabel("人間のアクティビティ機能を有効にする").check();
     await page.getByLabel("れい データディレクトリ").fill(humanRoot);
     await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+    await expect(
+      page.getByRole("dialog", { name: "設定", exact: true }),
+    ).not.toBeVisible();
     await expect
       .poll(
         async () =>
@@ -828,6 +837,9 @@ test("human performance: native synchronization keeps navigation responsive with
     await page.getByLabel("れい データディレクトリ").fill(humanRoot);
     const began = Date.now();
     await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+    await expect(
+      page.getByRole("dialog", { name: "設定", exact: true }),
+    ).not.toBeVisible();
     await expect
       .poll(
         async () =>
