@@ -9,7 +9,7 @@ import {
 } from "@testing-library/react";
 import App from "./App";
 import { api } from "./api";
-import type { Snapshot } from "./types";
+import type { Snapshot, HumanActivity } from "./types";
 vi.mock("./api", () => ({
   api: {
     boot: vi.fn(),
@@ -101,6 +101,164 @@ const mount = async () => {
   render(<App initialDate="2026-11-20" />);
   await screen.findByRole("button", { name: /Sample project.*10:00/ });
 };
+const humanRecords: HumanActivity[] = [
+  {
+    start: Date.parse("2026-11-20T10:30Z"),
+    end: Date.parse("2026-11-20T11:30Z"),
+    kind: "entertainment",
+  },
+  {
+    start: Date.parse("2026-11-20T11:30Z"),
+    end: Date.parse("2026-11-20T12:00Z"),
+    kind: "non_entertainment",
+  },
+  {
+    start: Date.parse("2026-11-20T12:45Z"),
+    end: Date.parse("2026-11-20T12:45Z"),
+    kind: "unknown",
+  },
+];
+async function withHuman(records = humanRecords) {
+  const boot = await api.boot();
+  vi.mocked(api.boot).mockResolvedValue({
+    ...boot,
+    config: { ...boot.config, human_activity_enabled: true },
+  });
+  vi.mocked(api.humanActivity).mockResolvedValue({ records, diagnostics: [] });
+}
+it("keeps independent filter hours and targets bulk operations to their own lists", async () => {
+  await withHuman();
+  await mount();
+  await waitFor(() => expect(api.humanActivity).toHaveBeenCalledTimes(1));
+  const humanCheckbox = screen.getByRole("checkbox", {
+    name: "人間の娯楽を表示",
+  });
+  expect(
+    within(humanCheckbox.closest("label")!).getByText("1h 0m"),
+  ).toBeVisible();
+  fireEvent.click(humanCheckbox);
+  expect(
+    within(humanCheckbox.closest("label")!).getByText("1h 0m"),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("button", { name: /^人間 娯楽 / }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: /Sample project.*10:00/ }),
+  ).toBeVisible();
+  const project = screen.getByRole("checkbox", {
+    name: "Sample project を表示",
+  });
+  fireEvent.click(project);
+  expect(within(project.closest("label")!).getByText("2h 0m")).toBeVisible();
+  expect(screen.getByRole("button", { name: /^人間 非娯楽 / })).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "人間の種別をすべてON" }));
+  expect(humanCheckbox).toBeChecked();
+  expect(project).not.toBeChecked();
+  fireEvent.click(
+    screen.getByRole("button", { name: "プロジェクトをすべてON" }),
+  );
+  expect(project).toBeChecked();
+  fireEvent.click(
+    screen.getByRole("button", { name: "人間の種別をすべてOFF" }),
+  );
+  expect(
+    screen.queryByRole("button", { name: /^人間 (娯楽|非娯楽|不明) / }),
+  ).not.toBeInTheDocument();
+  expect(api.humanActivity).toHaveBeenCalledTimes(1);
+});
+it("shows human-only records with zero projects and preserves filters through view changes", async () => {
+  await withHuman();
+  vi.mocked(api.snapshot).mockResolvedValue({
+    ...data,
+    projects: [],
+    turns: [],
+  });
+  render(<App initialDate="2026-11-20" />);
+  await waitFor(() => expect(api.humanActivity).toHaveBeenCalledTimes(1));
+  expect(
+    screen.getByRole("button", { name: "プロジェクトをすべてON" }),
+  ).toBeDisabled();
+  expect(
+    await screen.findByRole("button", { name: /^人間 娯楽 / }),
+  ).toBeVisible();
+  fireEvent.click(screen.getByRole("checkbox", { name: "人間の娯楽を表示" }));
+  fireEvent.click(screen.getByRole("button", { name: "日" }));
+  await waitFor(() =>
+    expect(document.querySelectorAll(".day-column")).toHaveLength(1),
+  );
+  expect(
+    screen.getByRole("checkbox", { name: "人間の娯楽を表示" }),
+  ).not.toBeChecked();
+  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  fireEvent.click(screen.getByRole("button", { name: "閉じる" }));
+  expect(
+    screen.getByRole("checkbox", { name: "人間の娯楽を表示" }),
+  ).not.toBeChecked();
+});
+it("limits human detail fields and closes it permanently after the feature is disabled", async () => {
+  const marker = "PRIVATE_RENDER_MARKER";
+  const record = {
+    ...humanRecords[0],
+    native_id: marker,
+    source_path: marker,
+    raw_disposition: marker,
+    foreground: { title: marker },
+  } as HumanActivity;
+  await withHuman([record]);
+  await mount();
+  const block = await screen.findByRole("button", { name: /^人間 娯楽 / });
+  expect(block.getAttribute("title")).not.toContain(marker);
+  fireEvent.click(block);
+  const detail = screen.getByRole("dialog", {
+    name: "人間のアクティビティ（推定）",
+  });
+  expect(detail).toHaveTextContent("推定終了時刻");
+  expect(detail).toHaveTextContent("Rei の観測に基づく推定");
+  expect(detail).not.toHaveTextContent(marker);
+  expect(
+    within(detail).queryByRole("button", { name: "ログの該当箇所を表示" }),
+  ).not.toBeInTheDocument();
+  // Exercise a saved config response arriving while a human selection exists.
+  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  fireEvent.click(
+    screen.getByLabelText("人間のアクティビティ機能を有効にする"),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("dialog", { name: "人間のアクティビティ（推定）" }),
+    ).not.toBeInTheDocument(),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  fireEvent.click(
+    screen.getByLabelText("人間のアクティビティ機能を有効にする"),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
+  await screen.findByRole("button", { name: /^人間 娯楽 / });
+  expect(
+    screen.queryByRole("dialog", { name: "人間のアクティビティ（推定）" }),
+  ).not.toBeInTheDocument();
+});
+it("opens a zero-second human point and clears its detail when the date changes", async () => {
+  await withHuman();
+  await mount();
+  fireEvent.click(
+    await screen.findByRole("button", { name: /^人間 不明 .*点の観測/ }),
+  );
+  const detail = screen.getByRole("dialog", {
+    name: "人間のアクティビティ（推定）",
+  });
+  expect(detail).toHaveTextContent("0h 0m 0.000s");
+  fireEvent.change(screen.getByLabelText("表示日"), {
+    target: { value: "2026-11-21" },
+  });
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("dialog", { name: "人間のアクティビティ（推定）" }),
+    ).not.toBeInTheDocument(),
+  );
+});
 it("enables human activity independently only after successful settings save", async () => {
   await mount();
   expect(api.humanActivity).not.toHaveBeenCalled();

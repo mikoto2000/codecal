@@ -222,6 +222,62 @@ h3 {
   color: var(--muted);
   white-space: nowrap;
 }
+.filter-toggle {
+  width: 100%;
+  margin-top: 8px;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+.project-filter.unselected {
+  color: color-mix(in srgb, var(--text) 70%, var(--surface));
+}
+.project-filter.unselected small {
+  color: inherit;
+}
+.human-filter-list {
+  flex-shrink: 0;
+  margin-top: 18px;
+}
+.human-filter-list .project-filter {
+  padding: 8px 0;
+}
+.human-filter-list .hint {
+  font-size: 10px;
+}
+.sidebar.with-human > .eyebrow {
+  margin-top: 20px;
+}
+.sidebar.with-human .sidebar-intro {
+  margin-bottom: 20px;
+}
+.sidebar.with-human .project-list {
+  min-height: 64px;
+  max-height: 30vh;
+  flex: 1 1 auto;
+}
+.sidebar.with-human .sidebar-bottom {
+  flex-shrink: 0;
+  padding-top: 14px;
+  margin-top: 14px;
+}
+@media (max-height: 800px) {
+  .sidebar.with-human {
+    padding: 16px 18px;
+  }
+  .sidebar.with-human > .eyebrow,
+  .sidebar.with-human .sidebar-intro {
+    display: none;
+  }
+  .sidebar.with-human .brand {
+    margin-bottom: 22px;
+  }
+  .sidebar.with-human .sidebar-bottom p {
+    display: none;
+  }
+  .sidebar.with-human .settings-button {
+    margin-top: 8px;
+  }
+}
 .dot {
   width: 7px;
   height: 7px;
@@ -520,6 +576,19 @@ h3 {
   border-style: dashed;
   opacity: 0.8;
   padding-top: 2px;
+}
+.activity-block.human-block {
+  border: 2px dashed var(--human-color);
+  background: color-mix(in srgb, var(--human-color) 18%, var(--surface));
+}
+.activity-block.human-block.point {
+  border-width: 1px;
+  padding: 0 3px;
+  gap: 0;
+}
+.activity-block.human-block.point strong {
+  font-size: 10px;
+  line-height: 10px;
 }
 .now-line {
   position: absolute;
