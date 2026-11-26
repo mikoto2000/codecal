@@ -796,7 +796,7 @@ fn failed_large_first_import_restores_indexes_and_an_empty_cache_before_retry() 
             .to_string(),
         "cache_write_failed"
     );
-    assert_eq!(conn.query_row("SELECT count(*) FROM sqlite_master WHERE type='index' AND name IN ('human_activity_start','human_activity_end')",[],|r|r.get::<_,i64>(0)).unwrap(),2);
+    assert_eq!(conn.query_row("SELECT count(*) FROM sqlite_master WHERE type='index' AND name IN ('human_activity_start','human_activity_end')",[],|r|r.get::<_,i64>(0)).unwrap(),1);
     assert_eq!(
         conn.query_row("SELECT count(*) FROM human_activity_records", [], |r| r
             .get::<_, i64>(0))

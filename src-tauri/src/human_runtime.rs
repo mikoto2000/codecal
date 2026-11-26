@@ -106,7 +106,7 @@ fn cache(path: &Path, read_only: bool) -> Result<Store, String> {
         if read_only {
             OpenFlags::SQLITE_OPEN_READ_ONLY
         } else {
-            OpenFlags::SQLITE_OPEN_READ_WRITE
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI
         },
     )
     .map_err(|_| "cache_open_failed")?;

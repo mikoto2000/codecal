@@ -335,6 +335,7 @@ pub struct HumanStage {
     file_identity: String,
     version: i64,
     diagnostics: Vec<HumanDiagnostic>,
+    resolved_conflicts: Option<u64>,
 }
 impl HumanStage {
     pub fn data_version(&self) -> i64 {
@@ -343,6 +344,75 @@ impl HumanStage {
     pub fn source_id(&self) -> &str {
         &self.source_id
     }
+}
+struct StagedObservation {
+    record: Observation,
+    hash: [u8; 32],
+}
+fn candidate_end(row: &StagedObservation) -> Result<i64, HumanError> {
+    row.record
+        .captured_at
+        .checked_add(row.record.duration_ms)
+        .ok_or(HumanError("staging_failed"))
+}
+struct MinimizedAttachment<'a>(&'a Connection);
+impl<'a> MinimizedAttachment<'a> {
+    fn new(conn: &'a Connection, stage: &HumanStage) -> Result<Self, HumanError> {
+        let path = stage
+            ._file
+            .path()
+            .to_str()
+            .ok_or(HumanError("staging_failed"))?
+            .replace('\\', "/");
+        let mut uri = String::from("file:");
+        for byte in path.bytes() {
+            if byte.is_ascii_alphanumeric() || b"/:-._~".contains(&byte) {
+                uri.push(char::from(byte));
+            } else {
+                use std::fmt::Write;
+                write!(&mut uri, "%{byte:02X}").map_err(|_| HumanError("staging_failed"))?;
+            }
+        }
+        uri.push_str("?mode=ro");
+        conn.execute("ATTACH DATABASE ? AS human_stage", [uri])
+            .map_err(|_| HumanError("staging_failed"))?;
+        let guard = Self(conn);
+        if !conn
+            .is_readonly("human_stage")
+            .map_err(|_| HumanError("staging_failed"))?
+        {
+            return Err(HumanError("staging_failed"));
+        }
+        Ok(guard)
+    }
+}
+impl Drop for MinimizedAttachment<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.execute_batch("DETACH DATABASE human_stage;");
+    }
+}
+
+fn append_staged(
+    insert: &mut rusqlite::Statement<'_>,
+    row: &StagedObservation,
+    end: Option<i64>,
+) -> Result<(), HumanError> {
+    let kind = match row.record.kind {
+        HumanKind::Entertainment => "entertainment",
+        HumanKind::NonEntertainment => "non_entertainment",
+        HumanKind::Unknown => "unknown",
+    };
+    insert
+        .execute(params![
+            row.record.native_id,
+            row.record.captured_at,
+            row.record.duration_ms,
+            kind,
+            row.hash.as_slice(),
+            end
+        ])
+        .map(|_| ())
+        .map_err(|_| HumanError("staging_failed"))
 }
 fn diagnostics(counts: BTreeMap<DiagnosticCode, u64>) -> Vec<HumanDiagnostic> {
     counts
@@ -455,7 +525,7 @@ impl HumanReader {
         }
         .map_err(|_| HumanError("staging_failed"))?;
         let conn = Connection::open(file.path()).map_err(|_| HumanError("staging_failed"))?;
-        conn.execute_batch("PRAGMA cache_size=-2048; CREATE TABLE records(native_id TEXT,captured_at INTEGER,duration_ms INTEGER,kind TEXT,content_hash BLOB);").map_err(|_| HumanError("staging_failed"))?;
+        conn.execute_batch("PRAGMA cache_size=-2048; CREATE TABLE records(native_id TEXT,captured_at INTEGER,duration_ms INTEGER,kind TEXT,content_hash BLOB,effective_end INTEGER);").map_err(|_| HumanError("staging_failed"))?;
         let staging = conn
             .unchecked_transaction()
             .map_err(|_| HumanError("staging_failed"))?;
@@ -466,12 +536,17 @@ impl HumanReader {
         validate_source_schema(&snapshot)?;
         let mut counts = BTreeMap::new();
         let mut cursor = None;
+        let mut pending: Option<StagedObservation> = None;
+        let mut last_start = None;
+        let mut ordered = true;
+        let mut conflicts = 0;
+        let mut group_conflict = false;
         let mut insert = staging
-            .prepare("INSERT INTO records VALUES(?,?,?,?,?)")
+            .prepare("INSERT INTO records VALUES(?,?,?,?,?,?)")
             .map_err(|_| HumanError("staging_failed"))?;
         loop {
             check()?;
-            let page = self.read_page(cursor)?;
+            let page = self.read_page_checked(cursor, &check)?;
             if page.cursor == cursor {
                 break;
             }
@@ -488,21 +563,41 @@ impl HumanReader {
                     record.kind,
                 ))
                 .map_err(|_| HumanError("staging_failed"))?;
-                let kind = match record.kind {
-                    HumanKind::Entertainment => "entertainment",
-                    HumanKind::NonEntertainment => "non_entertainment",
-                    HumanKind::Unknown => "unknown",
+                let current = StagedObservation {
+                    record,
+                    hash: Sha256::digest(content).into(),
                 };
-                insert
-                    .execute(params![
-                        record.native_id,
-                        record.captured_at,
-                        record.duration_ms,
-                        kind,
-                        Sha256::digest(content).to_vec()
-                    ])
-                    .map_err(|_| HumanError("staging_failed"))?;
+                ordered &= last_start.is_none_or(|last| current.record.captured_at >= last);
+                last_start = Some(current.record.captured_at);
+                match pending.take() {
+                    None => pending = Some(current),
+                    Some(previous) if previous.record.captured_at == current.record.captured_at => {
+                        group_conflict |= previous.record.kind != current.record.kind;
+                        if current.record.native_id > previous.record.native_id {
+                            append_staged(&mut insert, &previous, None)?;
+                            pending = Some(current);
+                        } else {
+                            append_staged(&mut insert, &current, None)?;
+                            pending = Some(previous);
+                        }
+                    }
+                    Some(previous) => {
+                        let end = if current.record.captured_at > previous.record.captured_at {
+                            candidate_end(&previous)?.min(current.record.captured_at)
+                        } else {
+                            candidate_end(&previous)?
+                        };
+                        append_staged(&mut insert, &previous, Some(end))?;
+                        conflicts += u64::from(group_conflict);
+                        group_conflict = false;
+                        pending = Some(current);
+                    }
+                }
             }
+        }
+        if let Some(last) = pending {
+            append_staged(&mut insert, &last, Some(candidate_end(&last)?))?;
+            conflicts += u64::from(group_conflict);
         }
         drop(insert);
         check()?;
@@ -514,7 +609,7 @@ impl HumanReader {
         // Append during the source snapshot, then sort only minimized fields.
         // A covering index avoids random heap lookups for UUID-ordered merging.
         check()?;
-        conn.execute_batch("CREATE INDEX records_native_order ON records(native_id,captured_at,duration_ms,kind,content_hash);").map_err(|_| HumanError("staging_failed"))?;
+        conn.execute_batch("CREATE INDEX records_native_order ON records(native_id,captured_at,duration_ms,kind,content_hash,effective_end);").map_err(|_| HumanError("staging_failed"))?;
         check()?;
         self.verify_identity()?;
         let source_path = self.path.to_string_lossy().to_string();
@@ -527,9 +622,18 @@ impl HumanReader {
             file_identity: self.file_identity.clone(),
             version,
             diagnostics: diagnostics(counts),
+            resolved_conflicts: ordered.then_some(conflicts),
         })
     }
     pub fn read_page(&self, after: Option<i64>) -> Result<ObservationPage, HumanError> {
+        self.read_page_checked(after, || Ok(()))
+    }
+    fn read_page_checked(
+        &self,
+        after: Option<i64>,
+        check: impl Fn() -> Result<(), HumanError>,
+    ) -> Result<ObservationPage, HumanError> {
+        check()?;
         self.verify_identity()?;
         let lower = match after {
             Some(i64::MAX) => {
@@ -542,8 +646,9 @@ impl HumanReader {
             Some(value) => value + 1,
             None => i64::MIN,
         };
-        let read = || -> rusqlite::Result<ObservationPage> {
-            let mut stmt = self.conn.prepare("SELECT rowid,
+        let mut interrupted = None;
+        let mut read = || -> rusqlite::Result<ObservationPage> {
+            let mut stmt = self.conn.prepare_cached("SELECT rowid,
                 CASE WHEN typeof(id)='text' AND octet_length(id) BETWEEN 1 AND 256 THEN id END,
                 CASE WHEN typeof(captured_at)='integer' THEN captured_at END,
                 CASE WHEN status='ok' THEN json_extract(payload,'$.durationEstimate') END,
@@ -564,7 +669,12 @@ impl HumanReader {
                 diagnostics: vec![],
             };
             let mut counts = BTreeMap::new();
-            while let Some(row) = rows.next()? {
+            loop {
+                if let Err(error) = check() {
+                    interrupted = Some(error);
+                    return Err(rusqlite::Error::InvalidQuery);
+                }
+                let Some(row) = rows.next()? else { break };
                 page.cursor = Some(row.get(0)?);
                 let status: String = row.get(5)?;
                 let code = match status.as_str() {
@@ -615,7 +725,11 @@ impl HumanReader {
             page.diagnostics = diagnostics(counts);
             Ok(page)
         };
-        let result = read().map_err(|_| HumanError("source_read_failed"))?;
+        let result = read();
+        if let Some(error) = interrupted {
+            return Err(error);
+        }
+        let result = result.map_err(|_| HumanError("source_read_failed"))?;
         self.verify_identity()?;
         Ok(result)
     }
@@ -632,7 +746,9 @@ impl crate::store::Store {
     ) -> Result<crate::human_summary::HumanSummaryResponse, HumanError> {
         let mut summary = crate::human_summary::Accumulator::new(from, to, timezone, visible)?;
         let diagnostics =
-            self.visit_human_source(source, from, to, |_id, _hash, record| summary.add(record))?;
+            self.visit_human_source(source, from, to, false, |_id, _hash, record| {
+                summary.add(record)
+            })?;
         Ok(crate::human_summary::HumanSummaryResponse {
             days: summary.finish(),
             diagnostics,
@@ -656,47 +772,118 @@ impl crate::store::Store {
         validate_period(from, to)?;
         let mut out: Vec<HumanActivity> = vec![];
         let mut last_date = None;
-        let diagnostics = self.visit_human_source(source, from, to, |_id, _hash, record| {
-            let mut start = record.start.max(from);
-            let end = record.end.min(to);
-            loop {
-                let local = chrono::DateTime::from_timestamp_millis(start)
-                    .ok_or(HumanError("cache_read_failed"))?
-                    .with_timezone(&tz);
-                let date = local.date_naive();
-                let boundary = crate::activity::next_day_boundary(&local)
-                    .map_err(|_| HumanError("cache_read_failed"))?;
-                let stop = end.min(boundary);
-                if let Some(previous) = out.last_mut().filter(|previous| {
-                    last_date == Some(date)
-                        && previous.kind == record.kind
-                        && previous.end == start
-                        && previous.start < previous.end
-                        && start < stop
-                }) {
-                    previous.end = stop;
-                } else {
-                    if out.len() == 50_000 {
-                        return Err(HumanError("period_too_dense"));
+        let diagnostics =
+            self.visit_human_source(source, from, to, false, |_id, _hash, record| {
+                let mut start = record.start.max(from);
+                let end = record.end.min(to);
+                loop {
+                    let local = chrono::DateTime::from_timestamp_millis(start)
+                        .ok_or(HumanError("cache_read_failed"))?
+                        .with_timezone(&tz);
+                    let date = local.date_naive();
+                    let boundary = crate::activity::next_day_boundary(&local)
+                        .map_err(|_| HumanError("cache_read_failed"))?;
+                    let stop = end.min(boundary);
+                    if let Some(previous) = out.last_mut().filter(|previous| {
+                        last_date == Some(date)
+                            && previous.kind == record.kind
+                            && previous.end == start
+                            && previous.start < previous.end
+                            && start < stop
+                    }) {
+                        previous.end = stop;
+                    } else {
+                        if out.len() == 50_000 {
+                            return Err(HumanError("period_too_dense"));
+                        }
+                        out.push(HumanActivity {
+                            start,
+                            end: stop,
+                            kind: record.kind,
+                        });
                     }
-                    out.push(HumanActivity {
-                        start,
-                        end: stop,
-                        kind: record.kind,
-                    });
+                    last_date = Some(date);
+                    if stop >= end {
+                        break;
+                    }
+                    start = stop;
                 }
-                last_date = Some(date);
-                if stop >= end {
-                    break;
-                }
-                start = stop;
-            }
-            Ok(())
-        })?;
+                Ok(())
+            })?;
         Ok(HumanActivityResponse {
             records: out,
             diagnostics,
         })
+    }
+    fn try_empty_human_import(
+        &mut self,
+        stage: &HumanStage,
+        key: &rusqlite::types::Value,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<bool, HumanError> {
+        let Some(conflicts) = stage.resolved_conflicts else {
+            return Ok(false);
+        };
+        if self
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM human_activity_records LIMIT 1)",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(cache_read_error)?
+        {
+            return Ok(false);
+        }
+        let _attachment = MinimizedAttachment::new(&self.conn, stage)?;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .map_err(cache_write_error)?;
+        // Recheck under the write lock before bypassing the retained-history merge.
+        if tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM human_activity_records LIMIT 1)",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(cache_read_error)?
+        {
+            return Ok(false);
+        }
+        if cancelled() {
+            return Err(HumanError("sync_cancelled"));
+        }
+        tx.execute_batch(
+            "DROP INDEX IF EXISTS human_activity_start; DROP INDEX IF EXISTS human_activity_end;",
+        )
+        .map_err(cache_write_error)?;
+        let mut counts = stage
+            .diagnostics
+            .iter()
+            .map(|d| (d.code, d.count))
+            .collect::<BTreeMap<_, _>>();
+        if conflicts > 0 {
+            counts.insert(DiagnosticCode::SimultaneousConflict, conflicts);
+        }
+        let encoded = serde_json::to_string(&diagnostics(counts))
+            .map_err(|_| HumanError("cache_write_failed"))?;
+        tx.execute("INSERT INTO human_activity_sources VALUES(?,?,?,?,?,'synced',?) ON CONFLICT(source_id) DO UPDATE SET reader_version=excluded.reader_version,last_sync=excluded.last_sync,sync_status=excluded.sync_status,diagnostics=excluded.diagnostics",params![key,stage.source_path,stage.file_identity,1,chrono::Utc::now().timestamp_millis(),encoded]).map_err(cache_write_error)?;
+        tx.execute("INSERT INTO human_activity_records SELECT ?,native_id,captured_at,duration_ms,kind,content_hash,effective_end FROM human_stage.records ORDER BY native_id",[key]).map_err(cache_write_error)?;
+        if cancelled() {
+            return Err(HumanError("sync_cancelled"));
+        }
+        tx.execute_batch(crate::migrations::HUMAN_START_INDEX_SQL)
+            .map_err(cache_write_error)?;
+        if cancelled() {
+            return Err(HumanError("sync_cancelled"));
+        }
+        if cancelled() {
+            return Err(HumanError("sync_cancelled"));
+        }
+        tx.commit().map_err(cache_write_error)?;
+        Ok(true)
     }
     fn prepare_human_changes(
         &self,
@@ -768,7 +955,15 @@ impl crate::store::Store {
         if cancelled() {
             return Err(HumanError("sync_cancelled"));
         }
+        // Bound the worker's SQLite page cache while avoiding UUID-keyed
+        // bulk imports repeatedly reading pages evicted by SQLite's 2 MiB default.
+        self.conn
+            .execute_batch("PRAGMA cache_size=-32768;")
+            .map_err(cache_write_error)?;
         let key = source_key(&self.conn, &stage.source_id)?;
+        if self.try_empty_human_import(stage, &key, &cancelled)? {
+            return Ok(());
+        }
         let changed = self.prepare_human_changes(stage, &key, &cancelled)?;
         if cancelled() {
             return Err(HumanError("sync_cancelled"));
@@ -821,8 +1016,10 @@ impl crate::store::Store {
                     )
                     .map_err(cache_write_error)?;
             if build_indexes {
-                tx.execute_batch("DROP INDEX human_activity_start; DROP INDEX human_activity_end;")
-                    .map_err(cache_write_error)?;
+                tx.execute_batch(
+                    "DROP INDEX human_activity_start; DROP INDEX IF EXISTS human_activity_end;",
+                )
+                .map_err(cache_write_error)?;
             }
             tx.execute("INSERT INTO human_activity_records SELECT ?,native_id,captured_at,duration_ms,kind,content_hash,captured_at+duration_ms FROM human_changes WHERE true ON CONFLICT(source_id,native_id) DO UPDATE SET captured_at=excluded.captured_at,duration_ms=excluded.duration_ms,kind=excluded.kind,content_hash=excluded.content_hash,effective_end=excluded.effective_end WHERE content_hash<>excluded.content_hash",[&key]).map_err(cache_write_error)?;
             if build_indexes {
@@ -836,9 +1033,6 @@ impl crate::store::Store {
                 for time in &times {
                     conflicts += conflict_at(&tx, &key, *time)?;
                 }
-            }
-            if build_indexes {
-                tx.execute_batch("CREATE INDEX human_activity_end ON human_activity_records(source_id,effective_end);").map_err(cache_write_error)?;
             }
             let mut counts = stage
                 .diagnostics
@@ -880,7 +1074,7 @@ impl crate::store::Store {
         let mut seen = HashSet::new();
         let mut counts = BTreeMap::new();
         for source in sources {
-            let ds = self.visit_human_source(source, from, to, |id, hash, record| {
+            let ds = self.visit_human_source(source, from, to, true, |id, hash, record| {
                 if seen.insert((id, hash, record.start, record.end, record.kind)) {
                     if records.len() == 50_000 {
                         return Err(HumanError("period_too_dense"));
@@ -904,6 +1098,7 @@ impl crate::store::Store {
         source: &str,
         from: i64,
         to: i64,
+        identity: bool,
         mut visit: impl FnMut(String, String, HumanActivity) -> Result<(), HumanError>,
     ) -> Result<Vec<HumanDiagnostic>, HumanError> {
         let key = source_key(&self.conn, source)?;
@@ -923,7 +1118,13 @@ impl crate::store::Store {
             serde_json::from_str(&raw).map_err(|_| HumanError("cache_read_failed"))?;
         // Representatives are disjoint per source. Seek the preceding one and
         // this period, then stream minimized cache rows to a bounded consumer.
-        let mut query=self.conn.prepare("SELECT native_id,CASE WHEN typeof(content_hash)='blob' THEN hex(content_hash) ELSE upper(content_hash) END,captured_at,effective_end,kind FROM human_activity_records WHERE source_id=?1 AND captured_at>=coalesce((SELECT max(p.captured_at) FROM human_activity_records p INDEXED BY human_activity_start WHERE p.source_id=?1 AND p.captured_at<?3 AND p.effective_end IS NOT NULL),?3) AND captured_at<?2 AND (effective_end>?3 OR (effective_end=captured_at AND captured_at>=?4)) ORDER BY captured_at,native_id").map_err(cache_read_error)?;
+        let identity_columns = if identity {
+            "native_id,CASE WHEN typeof(content_hash)='blob' THEN hex(content_hash) ELSE upper(content_hash) END"
+        } else {
+            "'',''"
+        };
+        let sql=format!("SELECT {identity_columns},captured_at,effective_end,kind FROM human_activity_records WHERE source_id=?1 AND captured_at>=coalesce((SELECT max(p.captured_at) FROM human_activity_records p INDEXED BY human_activity_start WHERE p.source_id=?1 AND p.captured_at<?3 AND p.effective_end IS NOT NULL),?3) AND captured_at<?2 AND (effective_end>?3 OR (effective_end=captured_at AND captured_at>=?4)) ORDER BY captured_at,native_id");
+        let mut query = self.conn.prepare(&sql).map_err(cache_read_error)?;
         let mut rows = query
             .query(params![&key, to, from, from])
             .map_err(cache_read_error)?;
@@ -942,6 +1143,68 @@ impl crate::store::Store {
 #[cfg(test)]
 mod privacy_tests {
     use super::*;
+
+    #[test]
+    fn only_minimized_staging_is_attached_read_only_and_detached_on_drop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("source.db");
+        let source = Connection::open(&path).unwrap();
+        source.execute_batch("CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT); INSERT INTO activity_records VALUES('fixture',1000,'{\"durationEstimate\":1}');").unwrap();
+        let stage = HumanReader::open(&path).unwrap().stage(|| false).unwrap();
+        let cache = Connection::open_in_memory().unwrap();
+        {
+            let _attachment = MinimizedAttachment::new(&cache, &stage).unwrap();
+            assert!(cache.is_readonly("human_stage").unwrap());
+            assert!(cache
+                .execute("DELETE FROM human_stage.records", [])
+                .is_err());
+            assert_eq!(
+                cache
+                    .query_row("SELECT count(*) FROM human_stage.records", [], |r| r
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                1
+            );
+            assert!(cache
+                .prepare("SELECT payload FROM human_stage.records")
+                .is_err());
+        }
+        assert!(cache.prepare("SELECT * FROM human_stage.records").is_err());
+    }
+
+    #[test]
+    fn a_page_can_be_cancelled_before_loading_all_large_payload_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("synthetic.db");
+        let writer = Connection::open(&path).unwrap();
+        writer.execute_batch("CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT);").unwrap();
+        let payload =
+            serde_json::json!({"durationEstimate":1,"foreground":{"title":"x".repeat(1_000_000)}})
+                .to_string();
+        for i in 0..8 {
+            writer
+                .execute(
+                    "INSERT INTO activity_records VALUES(?,?,?)",
+                    params![format!("synthetic-{i}"), 1000 + i, payload],
+                )
+                .unwrap();
+        }
+        let reader = HumanReader::open(&path).unwrap();
+        let checks = std::cell::Cell::new(0);
+        let error = reader
+            .read_page_checked(None, || {
+                checks.set(checks.get() + 1);
+                if checks.get() >= 3 {
+                    Err(HumanError("sync_cancelled"))
+                } else {
+                    Ok(())
+                }
+            })
+            .err()
+            .unwrap();
+        assert_eq!(error.to_string(), "sync_cancelled");
+        assert_eq!(checks.get(), 3);
+    }
 
     #[test]
     fn private_staging_file_never_contains_original_payload_fields() {

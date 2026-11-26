@@ -4,7 +4,7 @@ use rusqlite::{Connection, MAIN_DB};
 use std::path::Path;
 
 const VERSION: i64 = 4;
-pub(crate) const HUMAN_START_INDEX_SQL: &str = "CREATE INDEX human_activity_start ON human_activity_records(source_id,captured_at,native_id,duration_ms,effective_end,kind,content_hash);";
+pub(crate) const HUMAN_START_INDEX_SQL: &str = "CREATE INDEX human_activity_start ON human_activity_records(source_id,captured_at,native_id,duration_ms,effective_end,kind);";
 
 fn covering_period_index(conn: &Connection) -> Result<bool, String> {
     let mut query = conn
@@ -15,18 +15,21 @@ fn covering_period_index(conn: &Connection) -> Result<bool, String> {
         .map_err(err)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(err)?;
-    Ok(names
-        == [
-            "source_id",
-            "captured_at",
-            "native_id",
-            "duration_ms",
-            "effective_end",
-            "kind",
-            "content_hash",
-        ])
+    let unused_end: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='human_activity_end')",[],|r|r.get(0)).map_err(err)?;
+    Ok(!unused_end
+        && names
+            == [
+                "source_id",
+                "captured_at",
+                "native_id",
+                "duration_ms",
+                "effective_end",
+                "kind",
+            ])
 }
 fn ensure_period_index(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch("DROP INDEX IF EXISTS human_activity_end;")
+        .map_err(err)?;
     if !covering_period_index(conn)? {
         conn.execute_batch("DROP INDEX IF EXISTS human_activity_start;")
             .map_err(err)?;
@@ -242,7 +245,6 @@ pub(crate) fn migrate(
         kind TEXT NOT NULL CHECK(kind IN ('entertainment','non_entertainment','unknown')),
         content_hash BLOB NOT NULL,effective_end INTEGER,
         PRIMARY KEY(source_id,native_id)) WITHOUT ROWID;
-        CREATE INDEX IF NOT EXISTS human_activity_end ON human_activity_records(source_id,effective_end);
         CREATE INDEX IF NOT EXISTS human_activity_source_path ON human_activity_sources(source_path,last_sync);").map_err(err)?;
     validate(&tx)?;
     ensure_period_index(&tx)?;

@@ -39,10 +39,10 @@ fn repairs_legacy_or_missing_v4_period_index_without_losing_data_or_rebuilding_a
                 "native_id",
                 "duration_ms",
                 "effective_end",
-                "kind",
-                "content_hash"
+                "kind"
             ]
         );
+        assert_eq!(c.query_row("SELECT count(*) FROM sqlite_master WHERE type='index' AND name='human_activity_end'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
         assert_eq!(version(&path), 4);
         assert_eq!(
             c.query_row("SELECT count(*) FROM projects", [], |r| r.get::<_, i64>(0))
