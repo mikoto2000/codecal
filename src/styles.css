@@ -136,6 +136,62 @@ select {
   width: 12px;
   height: 4px;
 }
+@media (max-height: 800px) {
+  .workspace.with-human {
+    padding-top: 16px;
+    padding-bottom: 12px;
+  }
+  .workspace.with-human .topbar {
+    margin-bottom: 12px;
+  }
+  .workspace.with-human .human-sync {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 10px;
+    padding: 8px 12px;
+  }
+  .workspace.with-human .human-sync p {
+    margin: 0;
+  }
+  .workspace.with-human .human-sync > button {
+    margin-left: auto;
+  }
+  .workspace.with-human .human-sync [role="alert"] {
+    flex-basis: 100%;
+  }
+  .workspace.with-human .summary-cards {
+    margin-bottom: 12px;
+  }
+  .workspace.with-human .summary-cards > div {
+    padding: 10px 12px;
+    gap: 5px;
+  }
+  .workspace.with-human .summary-cards strong {
+    font-size: 21px;
+  }
+  .workspace.with-human .summary-cards small {
+    line-height: 1.3;
+  }
+  .workspace.with-human .human-totals {
+    margin-bottom: 10px;
+    padding: 8px 12px;
+    gap: 6px 14px;
+  }
+  .workspace.with-human .calendar-toolbar {
+    padding: 10px 14px;
+  }
+  .workspace.with-human .week-head > div {
+    padding: 7px 0;
+  }
+  .workspace.with-human .month-intro {
+    padding: 8px 0;
+  }
+  .workspace.with-human footer {
+    margin-top: 8px;
+  }
+}
 button {
   cursor: pointer;
   border: 1px solid var(--border);

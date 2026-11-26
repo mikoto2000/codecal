@@ -752,7 +752,11 @@ export default function App({ initialDate }: { initialDate?: string }) {
           </button>
         </div>
       </aside>
-      <div className="workspace">
+      <div
+        className={
+          config.human_activity_enabled ? "workspace with-human" : "workspace"
+        }
+      >
         <header className="topbar">
           <div>
             <span className="eyebrow">ACTIVITY CALENDAR</span>

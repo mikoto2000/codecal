@@ -263,6 +263,85 @@ it("opens human-only monthly day details with a separate AI list and a zero-seco
   expect(detail).not.toHaveTextContent("/rei");
   expect(detail).not.toHaveTextContent("Sample project");
 });
+it("applies month kind filters to day records and requests the selected day display unit", async () => {
+  await withHuman();
+  await mount();
+  fireEvent.click(screen.getByRole("button", { name: "月" }));
+  const cell = await screen.findByRole("button", { name: /^2026-11-20 / });
+  fireEvent.click(cell);
+  let dialog = screen.getByRole("dialog", {
+    name: "2026-11-20 のアクティビティ",
+  });
+  await within(dialog).findByRole("button", { name: /^人間 娯楽 / });
+  fireEvent.change(within(dialog).getByLabelText("人間の日別表示単位"), {
+    target: { value: "turn" },
+  });
+  await waitFor(() =>
+    expect(api.humanActivity).toHaveBeenLastCalledWith(
+      Date.parse("2026-11-20T00:00Z"),
+      Date.parse("2026-11-21T00:00Z"),
+      false,
+      "UTC",
+    ),
+  );
+  fireEvent.click(within(dialog).getByRole("button", { name: "閉じる" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "人間の非娯楽を表示" }));
+  fireEvent.click(cell);
+  dialog = screen.getByRole("dialog", { name: "2026-11-20 のアクティビティ" });
+  await within(dialog).findByRole("button", { name: /^人間 娯楽 / });
+  expect(
+    within(dialog).queryByRole("button", { name: /^人間 非娯楽 / }),
+  ).not.toBeInTheDocument();
+  expect(
+    within(dialog).getByRole("region", { name: "AIの実行履歴" }),
+  ).toHaveTextContent("合成ログから実装");
+});
+it("restores the original AI month presentation after human activity is disabled", async () => {
+  await withHuman();
+  await mount();
+  fireEvent.click(screen.getByRole("button", { name: "月" }));
+  await screen.findByRole("button", { name: /^2026-11-20 / });
+  await act(async () => {});
+  expect(document.querySelectorAll(".human-day-bar")).toHaveLength(3);
+  fireEvent.click(screen.getByRole("button", { name: "設定" }));
+  fireEvent.click(
+    screen.getByLabelText("人間のアクティビティ機能を有効にする"),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "設定を保存" }));
+  await waitFor(() =>
+    expect(document.querySelector(".human-day-bars")).toBeNull(),
+  );
+  expect(
+    screen.queryByRole("region", { name: "人間の観測推定時間" }),
+  ).not.toBeInTheDocument();
+  expect(document.querySelector(".human-legend")).toBeNull();
+  expect(
+    screen.getByRole("button", { name: "2026-11-20 2h 0m" }),
+  ).toHaveAttribute("data-level", "2");
+});
+it("shows summary retrieval failure without exposing input or claiming zero hours and retries", async () => {
+  await withHuman();
+  vi.mocked(api.humanSummary).mockRejectedValueOnce(
+    new Error("PRIVATE_SUMMARY_INPUT"),
+  );
+  await mount();
+  const region = screen.getByRole("region", { name: "人間の観測推定時間" });
+  await waitFor(() =>
+    expect(within(region).getByTestId("human-total")).toHaveTextContent("—"),
+  );
+  await within(region).findByRole("button", { name: "人間の集計を再試行" });
+  const filter = screen.getByRole("checkbox", { name: "人間の娯楽を表示" });
+  expect(filter.closest("label")!).toHaveTextContent("—");
+  expect(document.body).not.toHaveTextContent("PRIVATE_SUMMARY_INPUT");
+  fireEvent.click(
+    within(region).getByRole("button", { name: "人間の集計を再試行" }),
+  );
+  await waitFor(() =>
+    expect(within(region).getByTestId("human-total")).toHaveTextContent(
+      "1h 30m",
+    ),
+  );
+});
 it("keeps independent filter hours and targets bulk operations to their own lists", async () => {
   await withHuman();
   await mount();
