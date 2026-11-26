@@ -158,3 +158,11 @@ Phase 1 は Rust 読取/時間計算/DB、Phase 2 は worker/設定/IPC/削除�
 期間集計の索引からハッシュの重複保存を外し、集計とまとめ表示ではID/ハッシュをSQLから取得しません。複数ソースの記録単位取得に必要な内部重複除去だけは本体のハッシュを参照します。既存v4の索引をtransaction内で修復しますが、ReiやAIの行形式は変更しません。
 
 原本のIDは単独のTEXT主キーであることを読み取り前に確認する。IDが主キーの先頭であっても、複合主キーではID単独の一意性を保証できないため未知スキーマとして拒否する。rowidを隠す列・view・WITHOUT ROWIDの未知レイアウトも拒否し、原本を修復・移行しない。
+
+## 人間観測の保存先互換性
+
+Reiの `ActivityConfiguration.activityStore` は主DataSourceを受け取り、現行の `DataSourceConfiguration.dataSource` は `ReiPaths.memoryDbPath()` を使用する。従って、AI履歴のあるstorage.dbとは別に、人間のactivity_recordsがmemory.dbに保存される既存構成がある。SqliteActivityStoreのテーブル定義だけから保存先をstorage.dbに固定していた点を修正した。
+
+CodeCalは設定済みReiディレクトリのstorage.dbを優先する。read-only/query_onlyでスキーマだけを調べ、人間観測テーブルがない既知の構成、またはファイル自体がない場合に同じディレクトリのmemory.dbを参照する。壊れた/読取不能なstorage.dbや不適合な観測テーブルから別ファイルへ黙って切り替えない。任意ファイル探索、Rei設定の書換え、原本の移動/コピー/移行は行わない。memory.dbの会話・その他のテーブル内容も取得しない。
+
+2ファイルの記録を合算せず、選択した論理ファイルパスと物理ファイルIDで履歴を分離する。切替時は保持接続とdata_versionを破棄する。人間機能ONでは両DBとWALだけを非再帰監視し、OFFではmemory.dbの監視を外す。「現在ソース」の削除は設定済みReiディレクトリの2ファイルに対応する全世代のキャッシュと管理stagingを対象とし、他ディレクトリ・AI履歴・原本は保持する。既存キャッシュの再利用と欠落時保持は従来通りで、修正版の利用に原本の変更やキャッシュ削除は不要。

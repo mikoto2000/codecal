@@ -326,6 +326,16 @@ it("restores the original AI month presentation after human activity is disabled
     screen.getByRole("button", { name: "2026-11-20 2h 0m" }),
   ).toHaveAttribute("data-level", "2");
 });
+it("explains missing observation tables using only a fixed diagnostic message", async () => {
+  await withHuman();
+  vi.mocked(api.humanActivity).mockRejectedValue("unsupported_source");
+  await mount();
+  const alert = await within(
+    screen.getByRole("region", { name: "人間のアクティビティ同期" }),
+  ).findByRole("alert");
+  expect(alert).toHaveTextContent("対応する人間の観測テーブルが見つかりません");
+  expect(document.body).not.toHaveTextContent("unsupported_source");
+});
 it("shows summary retrieval failure without exposing input or claiming zero hours and retries", async () => {
   await withHuman();
   vi.mocked(api.humanSummary).mockRejectedValueOnce(
