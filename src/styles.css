@@ -578,8 +578,13 @@ h3 {
   padding-top: 2px;
 }
 .activity-block.human-block {
-  border: 2px dashed var(--human-color);
+  border: 1px dashed var(--human-color);
   background: color-mix(in srgb, var(--human-color) 18%, var(--surface));
+  padding: 3px 5px;
+  gap: 0;
+}
+.activity-block.human-block.compact {
+  padding: 0 2px;
 }
 .activity-block.human-block.point {
   border-width: 1px;

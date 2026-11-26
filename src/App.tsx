@@ -1019,7 +1019,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
                 <label>
                   表示単位{" "}
                   <select
-                    aria-label="作業ブロックの表示単位"
+                    aria-label="ブロックの表示単位"
                     value={grouping}
                     onChange={(e) =>
                       startTransition(() =>
@@ -1145,7 +1145,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
                               top: g.top * timelineScale,
                               height: g.unknown
                                 ? 22
-                                : Math.max(2, g.height * timelineScale),
+                                : Math.max(10, g.height * timelineScale),
                             })),
                           ...humanSegments
                             .filter((h) => h.date === d)
@@ -1168,7 +1168,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
                             return (
                               <button
                                 key={h.id}
-                                className={`activity-block human-block ${h.point ? "point" : ""}`}
+                                className={`activity-block human-block ${h.point ? "point" : ""} ${h.height < 24 ? "compact" : ""}`}
                                 aria-label={label}
                                 title={label}
                                 style={
@@ -1745,6 +1745,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
             <label>
               テーマ
               <select
+                aria-label="テーマ"
                 value={draft.theme}
                 onChange={(e) =>
                   setDraft({

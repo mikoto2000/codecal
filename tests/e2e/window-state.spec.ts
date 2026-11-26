@@ -89,7 +89,10 @@ async function launch() {
     .poll(() => browser.contexts().flatMap((c) => c.pages()).length)
     .toBeGreaterThan(0);
   page = browser.contexts().flatMap((c) => c.pages())[0];
-  await page.getByLabel("表示日").waitFor();
+  await page.getByLabel("表示日").waitFor({
+    state: "visible",
+    timeout: Math.max(1, 60000 - (Date.now() - startupBegan)),
+  });
 }
 async function closeNormally() {
   // Closing the native main window triggers Tauri's normal exit lifecycle.

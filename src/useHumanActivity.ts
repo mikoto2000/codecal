@@ -116,7 +116,10 @@ export function useHumanActivity({
           error: status.error ? humanErrorCode(status.error) : null,
         },
       }));
-      if (revision !== status.revision || (!status.busy && status.error !== null)) {
+      if (
+        revision !== status.revision ||
+        (!status.busy && status.error !== null)
+      ) {
         revision = status.revision;
         void fetchPeriod();
       }

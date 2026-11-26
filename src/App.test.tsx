@@ -1131,7 +1131,7 @@ it("defaults to grouped blocks and preserves exact totals and every turn in deta
   vi.mocked(api.snapshot).mockResolvedValue(groupedData);
   await mount();
   expect(document.querySelectorAll(".activity-block")).toHaveLength(1);
-  expect(screen.getByLabelText("作業ブロックの表示単位")).toHaveValue("group");
+  expect(screen.getByLabelText("ブロックの表示単位")).toHaveValue("group");
   expect(screen.getByTestId("total-elapsed")).toHaveTextContent("2h 15m");
   fireEvent.click(
     screen.getByRole("button", { name: /Sample project.*10:00/ }),
@@ -1151,7 +1151,7 @@ it("defaults to grouped blocks and preserves exact totals and every turn in deta
 it("switches between grouped and individual blocks without changing the summaries", async () => {
   vi.mocked(api.snapshot).mockResolvedValue(groupedData);
   await mount();
-  fireEvent.change(screen.getByLabelText("作業ブロックの表示単位"), {
+  fireEvent.change(screen.getByLabelText("ブロックの表示単位"), {
     target: { value: "turn" },
   });
   await waitFor(() =>
@@ -1162,8 +1162,8 @@ it("switches between grouped and individual blocks without changing the summarie
   await waitFor(() =>
     expect(document.querySelectorAll(".day-column")).toHaveLength(1),
   );
-  expect(screen.getByLabelText("作業ブロックの表示単位")).toHaveValue("turn");
-  fireEvent.change(screen.getByLabelText("作業ブロックの表示単位"), {
+  expect(screen.getByLabelText("ブロックの表示単位")).toHaveValue("turn");
+  fireEvent.change(screen.getByLabelText("ブロックの表示単位"), {
     target: { value: "group" },
   });
   await waitFor(() =>
