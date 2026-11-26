@@ -48,3 +48,9 @@ AI履歴とは独立した既定OFFの機能です。Reiの `activity_records` �
 日・週・月と日別一覧、推定時間の計算、キャッシュ保持・削除・再取り込み、ソース変更時の扱いは [人間アクティビティ設計](human-activity-design.md) と [プライバシー保護](human-activity-privacy.md) を参照してください。人間の観測をAIのプロジェクトへ割り当てず、既存のAI集計には加算しません。
 
 同一接続のdata_versionが変わった場合は全観測を再確認します。AIイベントだけが更新されても、人間のレコードに専用変更sequenceがないため全確認が必要です。元で削除・不正更新された正常キャッシュは自動削除せず、明示削除後に原本から再取り込みします。別の物理ファイルへ切り替えると表示対象を分離します。ファイルIDを保持したままのin-place上書きは通常の置換と区別できない制約があります。
+
+## 人間観測の保存先互換性
+
+ReiのActivityStoreは主DataSourceを受け取り、現行DataSourceConfigurationはReiPaths.memoryDbPath()を使用する。AI履歴のstorage.dbとは別に、人間観測がmemory.dbにある構成にも対応する。CodeCalでは人間観測テーブルのあるstorage.dbを優先し、そのテーブルがない既知の構成またはファイル欠落時に、同じReiディレクトリのmemory.dbを使う。壊れた/読取不能なstorage.dbから黙って切り替えない。
+
+原本の移動・コピー・Rei設定変更やキャッシュ削除は不要。CodeCalの保存先設定は引き続きReiディレクトリを指定する。切替時は接続とdata_versionを更新し、両ファイルの履歴を合算しない。詳細は[設計](human-activity-design.md#人間観測の保存先互換性)を参照。
