@@ -73,6 +73,17 @@ export type HumanActivityResponse = {
   records: HumanActivity[];
   diagnostics: HumanActivityDiagnostic[];
 };
+export type HumanDaySummary = {
+  date: string;
+  day_length_ms: number;
+  total_ms: number;
+  kinds: Record<HumanActivityKind, number>;
+  observed: HumanActivityKind[];
+};
+export type HumanSummaryResponse = {
+  days: HumanDaySummary[];
+  diagnostics: HumanActivityDiagnostic[];
+};
 export type HumanSyncStatus = {
   generation: number;
   busy: boolean;
