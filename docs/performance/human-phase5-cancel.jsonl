@@ -1,0 +1,1 @@
+{"cancel_requested_after_ms":100,"cancel_total_ms":102.91409999999999,"deadline_fixture":"20ms slow cancellation callback; production 30s deadline unchanged","deadline_ms":30043.169899999997,"large_payload_bytes":1047972,"normal_cache_preserved":true,"retry_ms":2347.2653,"retry_rows":1001,"rows":1001}

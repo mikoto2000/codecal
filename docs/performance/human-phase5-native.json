@@ -1,0 +1,62 @@
+{
+  "rows": 1000000,
+  "sync_memory": {
+    "processes": 7,
+    "requested_sample_interval_ms": 20,
+    "baseline_tree_rss_bytes": 459833344,
+    "samples": 44,
+    "observed_peak_tree_rss_bytes": 586858496,
+    "duration_ms": 8295.382800000001,
+    "scope": "Tauri plus its initial live descendants including WebView2; newly created or exited transient subprocesses are not independently tracked",
+    "observed_tree_rss_increment_bytes": 127025152
+  },
+  "initial_worker_and_ui_ms": 7712,
+  "navigation_samples_ms": [
+    36.59999990463257, 40.60000014305115, 40.90000009536743, 41.19999980926514,
+    41.40000009536743, 42.200000047683716, 42.40000009536743,
+    42.700000047683716, 42.700000047683716, 43.09999990463257,
+    43.200000047683716, 43.200000047683716, 43.5, 43.59999990463257,
+    43.700000047683716, 43.700000047683716, 43.799999952316284,
+    43.799999952316284, 43.80000019073486, 44.200000047683716,
+    44.299999952316284, 44.90000009536743, 45, 45.200000047683716,
+    46.200000047683716, 46.299999952316284, 46.5, 46.59999990463257,
+    48.09999990463257, 106
+  ],
+  "navigation_during_sync": 30,
+  "navigation_p95_ms": 48.09999990463257,
+  "summary_ipc_ms": 40,
+  "summary_ipc_bytes": 7125,
+  "period_ipc": {
+    "day": {
+      "samples_ms": [
+        7.700000047683716, 8.100000143051147, 8.299999952316284,
+        8.599999904632568, 8.800000190734863
+      ],
+      "p95_ms": 8.800000190734863,
+      "response_bytes": 102270
+    },
+    "week": {
+      "samples_ms": [
+        31.299999952316284, 31.299999952316284, 31.90000009536743,
+        32.299999952316284, 33.90000009536743
+      ],
+      "p95_ms": 33.90000009536743,
+      "response_bytes": 715710
+    },
+    "month": {
+      "samples_ms": [
+        29, 29.09999990463257, 29.40000009536743, 29.90000009536743, 31.5
+      ],
+      "p95_ms": 31.5,
+      "response_bytes": 7125
+    }
+  },
+  "external_requests": 0,
+  "main_process_baseline_rss": 32129024,
+  "main_process_peak_rss": 108191744,
+  "main_process_rss_increment": 76062720,
+  "tree_baseline_rss": 453443584,
+  "tree_peak_sum_rss": 657608704,
+  "tree_rss_increment": 204165120,
+  "memory_scope": "Tauri main plus live descendants, including WebView2; sum of each process peak is conservative for live processes; exited transient subprocesses are excluded"
+}

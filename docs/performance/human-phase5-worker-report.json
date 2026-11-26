@@ -1,0 +1,44 @@
+{
+  "minimum_samples": 5,
+  "percentile_method": "nearest-rank",
+  "worker": {
+    "rounds": 5,
+    "metrics": {
+      "initial_worker_ms": {
+        "samples": 5,
+        "median_ms": 9065.608900000001,
+        "p95_ms": 9579.446600000001,
+        "max_ms": 9579.446600000001,
+        "budget_ms": 10000,
+        "status": "passed"
+      },
+      "forced_worker_ms": {
+        "samples": 5,
+        "median_ms": 5362.343400000001,
+        "p95_ms": 5862.0398,
+        "max_ms": 5862.0398,
+        "budget_ms": 10000,
+        "status": "passed"
+      },
+      "unchanged_active_ms": {
+        "samples": 25,
+        "median_ms": 0.18589999999999998,
+        "p95_ms": 0.3469,
+        "max_ms": 0.3584,
+        "budget_ms": 100,
+        "status": "passed"
+      },
+      "summary_ms": {
+        "samples": 5,
+        "median_ms": 26.8631,
+        "p95_ms": 44.0616,
+        "max_ms": 44.0616,
+        "budget_ms": 500,
+        "status": "passed"
+      }
+    },
+    "writer_rounds_passed": 5,
+    "wal_rounds_passed": 5,
+    "worker_gates_passed": true
+  }
+}

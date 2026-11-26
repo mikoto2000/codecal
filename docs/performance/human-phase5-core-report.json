@@ -1,0 +1,450 @@
+{
+  "minimum_samples": 5,
+  "percentile_method": "nearest-rank",
+  "core": [
+    {
+      "rows": 10000,
+      "id_kind": "sequential",
+      "cadence_ms": 60000,
+      "rounds": 5,
+      "failed_rounds": 0,
+      "metrics": {
+        "initial_sync_ms": {
+          "samples": 5,
+          "median_ms": 287.1403,
+          "p95_ms": 437.7192,
+          "max_ms": 437.7192,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "unchanged_check_ms": {
+          "samples": 5,
+          "median_ms": 0.0896,
+          "p95_ms": 0.11220000000000001,
+          "max_ms": 0.11220000000000001,
+          "budget_ms": 100,
+          "status": "passed"
+        },
+        "one_added_sync_ms": {
+          "samples": 5,
+          "median_ms": 271.15479999999997,
+          "p95_ms": 334.40209999999996,
+          "max_ms": 334.40209999999996,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "one_updated_sync_ms": {
+          "samples": 5,
+          "median_ms": 295.30060000000003,
+          "p95_ms": 379.61440000000005,
+          "max_ms": 379.61440000000005,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "ai_only_sync_ms": {
+          "samples": 5,
+          "median_ms": 349.40909999999997,
+          "p95_ms": 379.11240000000004,
+          "max_ms": 379.11240000000004,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "day.ms": {
+          "samples": 5,
+          "median_ms": 1.759,
+          "p95_ms": 1.9684,
+          "max_ms": 1.9684,
+          "budget_ms": 100,
+          "status": "passed"
+        },
+        "week.ms": {
+          "samples": 5,
+          "median_ms": 11.9116,
+          "p95_ms": 13.780199999999999,
+          "max_ms": 13.780199999999999,
+          "budget_ms": 200,
+          "status": "passed"
+        },
+        "month_summary.ms": {
+          "samples": 5,
+          "median_ms": 2.4951,
+          "p95_ms": 3.0622000000000003,
+          "max_ms": 3.0622000000000003,
+          "budget_ms": 500,
+          "status": "passed"
+        }
+      },
+      "core_gates_passed": true
+    },
+    {
+      "rows": 10000,
+      "id_kind": "uuid",
+      "cadence_ms": 60000,
+      "rounds": 5,
+      "failed_rounds": 0,
+      "metrics": {
+        "initial_sync_ms": {
+          "samples": 5,
+          "median_ms": 318.4058,
+          "p95_ms": 379.5648,
+          "max_ms": 379.5648,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "unchanged_check_ms": {
+          "samples": 5,
+          "median_ms": 0.0932,
+          "p95_ms": 0.2062,
+          "max_ms": 0.2062,
+          "budget_ms": 100,
+          "status": "passed"
+        },
+        "one_added_sync_ms": {
+          "samples": 5,
+          "median_ms": 344.35909999999996,
+          "p95_ms": 424.5486,
+          "max_ms": 424.5486,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "one_updated_sync_ms": {
+          "samples": 5,
+          "median_ms": 310.2775,
+          "p95_ms": 452.10040000000004,
+          "max_ms": 452.10040000000004,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "ai_only_sync_ms": {
+          "samples": 5,
+          "median_ms": 284.0155,
+          "p95_ms": 329.79019999999997,
+          "max_ms": 329.79019999999997,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "day.ms": {
+          "samples": 5,
+          "median_ms": 2.2458,
+          "p95_ms": 3.8901,
+          "max_ms": 3.8901,
+          "budget_ms": 100,
+          "status": "passed"
+        },
+        "week.ms": {
+          "samples": 5,
+          "median_ms": 15.0045,
+          "p95_ms": 29.8692,
+          "max_ms": 29.8692,
+          "budget_ms": 200,
+          "status": "passed"
+        },
+        "month_summary.ms": {
+          "samples": 5,
+          "median_ms": 2.4587,
+          "p95_ms": 3.7754,
+          "max_ms": 3.7754,
+          "budget_ms": 500,
+          "status": "passed"
+        }
+      },
+      "core_gates_passed": true
+    },
+    {
+      "rows": 100000,
+      "id_kind": "sequential",
+      "cadence_ms": 60000,
+      "rounds": 5,
+      "failed_rounds": 0,
+      "metrics": {
+        "initial_sync_ms": {
+          "samples": 5,
+          "median_ms": 956.7079000000001,
+          "p95_ms": 1109.2187,
+          "max_ms": 1109.2187,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "unchanged_check_ms": {
+          "samples": 5,
+          "median_ms": 0.0989,
+          "p95_ms": 0.1218,
+          "max_ms": 0.1218,
+          "budget_ms": 100,
+          "status": "passed"
+        },
+        "one_added_sync_ms": {
+          "samples": 5,
+          "median_ms": 645.7783999999999,
+          "p95_ms": 778.1365,
+          "max_ms": 778.1365,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "one_updated_sync_ms": {
+          "samples": 5,
+          "median_ms": 679.4445000000001,
+          "p95_ms": 698.4359,
+          "max_ms": 698.4359,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "ai_only_sync_ms": {
+          "samples": 5,
+          "median_ms": 631.8545,
+          "p95_ms": 750.7051,
+          "max_ms": 750.7051,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "day.ms": {
+          "samples": 5,
+          "median_ms": 1.8920000000000001,
+          "p95_ms": 1.9708999999999999,
+          "max_ms": 1.9708999999999999,
+          "budget_ms": 100,
+          "status": "passed"
+        },
+        "week.ms": {
+          "samples": 5,
+          "median_ms": 12.8339,
+          "p95_ms": 13.6126,
+          "max_ms": 13.6126,
+          "budget_ms": 200,
+          "status": "passed"
+        },
+        "month_summary.ms": {
+          "samples": 5,
+          "median_ms": 14.1829,
+          "p95_ms": 20.591600000000003,
+          "max_ms": 20.591600000000003,
+          "budget_ms": 500,
+          "status": "passed"
+        }
+      },
+      "core_gates_passed": true
+    },
+    {
+      "rows": 100000,
+      "id_kind": "uuid",
+      "cadence_ms": 60000,
+      "rounds": 5,
+      "failed_rounds": 0,
+      "metrics": {
+        "initial_sync_ms": {
+          "samples": 5,
+          "median_ms": 966.0202,
+          "p95_ms": 1042.3349,
+          "max_ms": 1042.3349,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "unchanged_check_ms": {
+          "samples": 5,
+          "median_ms": 0.1113,
+          "p95_ms": 0.1556,
+          "max_ms": 0.1556,
+          "budget_ms": 100,
+          "status": "passed"
+        },
+        "one_added_sync_ms": {
+          "samples": 5,
+          "median_ms": 863.2161000000001,
+          "p95_ms": 943.0237999999999,
+          "max_ms": 943.0237999999999,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "one_updated_sync_ms": {
+          "samples": 5,
+          "median_ms": 773.7623,
+          "p95_ms": 914.356,
+          "max_ms": 914.356,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "ai_only_sync_ms": {
+          "samples": 5,
+          "median_ms": 813.4372,
+          "p95_ms": 893.0835000000001,
+          "max_ms": 893.0835000000001,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "day.ms": {
+          "samples": 5,
+          "median_ms": 3.6818,
+          "p95_ms": 4.3848,
+          "max_ms": 4.3848,
+          "budget_ms": 100,
+          "status": "passed"
+        },
+        "week.ms": {
+          "samples": 5,
+          "median_ms": 22.3354,
+          "p95_ms": 24.5248,
+          "max_ms": 24.5248,
+          "budget_ms": 200,
+          "status": "passed"
+        },
+        "month_summary.ms": {
+          "samples": 5,
+          "median_ms": 15.893,
+          "p95_ms": 20.9597,
+          "max_ms": 20.9597,
+          "budget_ms": 500,
+          "status": "passed"
+        }
+      },
+      "core_gates_passed": true
+    },
+    {
+      "rows": 1000000,
+      "id_kind": "sequential",
+      "cadence_ms": 60000,
+      "rounds": 5,
+      "failed_rounds": 0,
+      "metrics": {
+        "initial_sync_ms": {
+          "samples": 5,
+          "median_ms": 6325.6466,
+          "p95_ms": 6698.3906,
+          "max_ms": 6698.3906,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "unchanged_check_ms": {
+          "samples": 5,
+          "median_ms": 0.12010000000000001,
+          "p95_ms": 0.1331,
+          "max_ms": 0.1331,
+          "budget_ms": 100,
+          "status": "passed"
+        },
+        "one_added_sync_ms": {
+          "samples": 5,
+          "median_ms": 4381.9651,
+          "p95_ms": 4701.5007000000005,
+          "max_ms": 4701.5007000000005,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "one_updated_sync_ms": {
+          "samples": 5,
+          "median_ms": 4328.5231,
+          "p95_ms": 6442.8323,
+          "max_ms": 6442.8323,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "ai_only_sync_ms": {
+          "samples": 5,
+          "median_ms": 3956.9486,
+          "p95_ms": 5561.9426,
+          "max_ms": 5561.9426,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "day.ms": {
+          "samples": 5,
+          "median_ms": 2.1816,
+          "p95_ms": 2.2775,
+          "max_ms": 2.2775,
+          "budget_ms": 100,
+          "status": "passed"
+        },
+        "week.ms": {
+          "samples": 5,
+          "median_ms": 14.1507,
+          "p95_ms": 14.6693,
+          "max_ms": 14.6693,
+          "budget_ms": 200,
+          "status": "passed"
+        },
+        "month_summary.ms": {
+          "samples": 5,
+          "median_ms": 14.2945,
+          "p95_ms": 15.079600000000001,
+          "max_ms": 15.079600000000001,
+          "budget_ms": 500,
+          "status": "passed"
+        }
+      },
+      "core_gates_passed": true
+    },
+    {
+      "rows": 1000000,
+      "id_kind": "uuid",
+      "cadence_ms": 60000,
+      "rounds": 5,
+      "failed_rounds": 0,
+      "metrics": {
+        "initial_sync_ms": {
+          "samples": 5,
+          "median_ms": 9067.069,
+          "p95_ms": 9858.302800000001,
+          "max_ms": 9858.302800000001,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "unchanged_check_ms": {
+          "samples": 5,
+          "median_ms": 0.1417,
+          "p95_ms": 0.1893,
+          "max_ms": 0.1893,
+          "budget_ms": 100,
+          "status": "passed"
+        },
+        "one_added_sync_ms": {
+          "samples": 5,
+          "median_ms": 5606.4881,
+          "p95_ms": 7080.92,
+          "max_ms": 7080.92,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "one_updated_sync_ms": {
+          "samples": 5,
+          "median_ms": 5319.7867,
+          "p95_ms": 5968.536300000001,
+          "max_ms": 5968.536300000001,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "ai_only_sync_ms": {
+          "samples": 5,
+          "median_ms": 5127.1972000000005,
+          "p95_ms": 5359.191400000001,
+          "max_ms": 5359.191400000001,
+          "budget_ms": 10000,
+          "status": "passed"
+        },
+        "day.ms": {
+          "samples": 5,
+          "median_ms": 19.5786,
+          "p95_ms": 29.412,
+          "max_ms": 29.412,
+          "budget_ms": 100,
+          "status": "passed"
+        },
+        "week.ms": {
+          "samples": 5,
+          "median_ms": 84.0588,
+          "p95_ms": 142.7861,
+          "max_ms": 142.7861,
+          "budget_ms": 200,
+          "status": "passed"
+        },
+        "month_summary.ms": {
+          "samples": 5,
+          "median_ms": 18.9077,
+          "p95_ms": 29.283900000000003,
+          "max_ms": 29.283900000000003,
+          "budget_ms": 500,
+          "status": "passed"
+        }
+      },
+      "core_gates_passed": true
+    }
+  ]
+}
