@@ -183,3 +183,50 @@ fn long_estimates_are_clipped_before_daily_display_splitting() {
         "invalid_timezone"
     );
 }
+
+#[test]
+fn bulk_initial_import_keeps_reverse_id_ties_points_long_estimates_and_late_old_rows() {
+    for late_old_row in [false, true] {
+        let mut records = (0..5002)
+            .map(|i| (i * 1000, 1, "ENTERTAINMENT"))
+            .collect::<Vec<_>>();
+        records[10] = (9000, 1, "NON_ENTERTAINMENT"); // synthetic-9 wins over synthetic-10.
+        records[20] = (20000, 0, "UNCERTAIN");
+        records[30] = (30000, 172800, "ENTERTAINMENT");
+        if late_old_row {
+            records.push((500, 1, "NON_ENTERTAINMENT"));
+        }
+        let (_tmp, store, id) = cache(&records);
+        let response = store.human_activity(&[id], 0, 6_000_000).unwrap();
+        let tie = response.records.iter().find(|r| r.start == 9000).unwrap();
+        assert_eq!((tie.end, tie.kind), (10000, HumanKind::Entertainment));
+        assert_eq!(
+            response.records.iter().filter(|r| r.start == 9000).count(),
+            1
+        );
+        let point = response.records.iter().find(|r| r.start == 20000).unwrap();
+        assert_eq!((point.end, point.kind), (20000, HumanKind::Unknown));
+        assert_eq!(
+            response
+                .records
+                .iter()
+                .find(|r| r.start == 30000)
+                .unwrap()
+                .end,
+            31000
+        );
+        assert_eq!(
+            response.records[0].end,
+            if late_old_row { 500 } else { 1000 }
+        );
+        if late_old_row {
+            assert!(response
+                .records
+                .iter()
+                .any(|r| r.start == 500 && r.end == 1000));
+        }
+        assert!(response.diagnostics.iter().any(|d| d.code
+            == codecal_lib::rei_human::DiagnosticCode::SimultaneousConflict
+            && d.count == 1));
+    }
+}
