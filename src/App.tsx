@@ -755,6 +755,52 @@ export default function App({ initialDate }: { initialDate?: string }) {
               </label>
             ))}
             <p className="hint">観測に基づく推定時間</p>
+            <section
+              className="human-sync"
+              aria-label="人間のアクティビティ同期"
+              aria-busy={humanState.status.busy || humanState.loading}
+            >
+              <p className="hint">
+                {config.auto_refresh ? "自動同期: 1時間ごと" : "自動同期: OFF"}
+              </p>
+              <p role="status">
+                {humanState.status.busy
+                  ? "人間のアクティビティを同期中…"
+                  : humanState.loading
+                    ? "人間のアクティビティを取得中…"
+                    : humanState.error || humanState.status.error
+                      ? "人間のアクティビティの同期・取得結果を確認してください。"
+                      : humanState.status.last_success !== null
+                        ? "人間のアクティビティの前回同期は完了しています。"
+                        : "人間のアクティビティの同期結果を待っています。"}
+              </p>
+              {(humanState.error || humanState.status.error) && (
+                <p role="alert">
+                  {humanState.error === "period_too_dense"
+                    ? "この期間の人間の記録が多すぎます。まとめ表示または短い期間に変更してください。"
+                    : (humanState.error || humanState.status.error) ===
+                        "unsupported_source"
+                      ? "対応する人間の観測テーブルが見つかりません。れいのデータディレクトリと記録の保存形式を確認してください。"
+                      : (humanState.error || humanState.status.error) ===
+                          "source_unavailable"
+                        ? "人間のアクティビティの保存先を開けません。れいのデータディレクトリと読み取り権限を確認してください。"
+                        : "人間のアクティビティを読み取れません。設定または原本を確認して再試行してください。"}
+                </p>
+              )}
+              {humanState.diagnostics.length > 0 && (
+                <p>
+                  ソース全体の診断:{" "}
+                  {humanState.diagnostics.reduce((sum, d) => sum + d.count, 0)}
+                  件（不正な観測や長い推定など）
+                </p>
+              )}
+              <button
+                onClick={humanState.retry}
+                disabled={humanState.status.busy || humanState.loading}
+              >
+                人間のアクティビティを再同期
+              </button>
+            </section>
           </section>
         )}
         <div className="sidebar-bottom">
@@ -905,51 +951,6 @@ export default function App({ initialDate }: { initialDate?: string }) {
               ×
             </button>
           </div>
-        )}
-        {config?.human_activity_enabled && (
-          <section
-            className="human-sync"
-            aria-label="人間のアクティビティ同期"
-            aria-busy={humanState.status.busy || humanState.loading}
-          >
-            <p role="status">
-              {humanState.status.busy
-                ? "人間のアクティビティを同期中…"
-                : humanState.loading
-                  ? "人間のアクティビティを取得中…"
-                  : humanState.error || humanState.status.error
-                    ? "人間のアクティビティの同期・取得結果を確認してください。"
-                    : humanState.status.last_success !== null
-                      ? "人間のアクティビティの前回同期は完了しています。"
-                      : "人間のアクティビティの同期結果を待っています。"}
-            </p>
-            {(humanState.error || humanState.status.error) && (
-              <p role="alert">
-                {humanState.error === "period_too_dense"
-                  ? "この期間の人間の記録が多すぎます。まとめ表示または短い期間に変更してください。"
-                  : (humanState.error || humanState.status.error) ===
-                      "unsupported_source"
-                    ? "対応する人間の観測テーブルが見つかりません。れいのデータディレクトリと記録の保存形式を確認してください。"
-                    : (humanState.error || humanState.status.error) ===
-                        "source_unavailable"
-                      ? "人間のアクティビティの保存先を開けません。れいのデータディレクトリと読み取り権限を確認してください。"
-                      : "人間のアクティビティを読み取れません。設定または原本を確認して再試行してください。"}
-              </p>
-            )}
-            {humanState.diagnostics.length > 0 && (
-              <p>
-                ソース全体の診断:{" "}
-                {humanState.diagnostics.reduce((sum, d) => sum + d.count, 0)}
-                件（不正な観測や長い推定など）
-              </p>
-            )}
-            <button
-              onClick={humanState.retry}
-              disabled={humanState.status.busy || humanState.loading}
-            >
-              人間のアクティビティを再同期
-            </button>
-          </section>
         )}
         {(filtered.length > 0 || !config.human_activity_enabled) && (
           <section className="summary-cards" aria-label="表示期間の集計">

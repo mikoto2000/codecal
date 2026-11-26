@@ -179,6 +179,7 @@ writerは同じ合成原本のagent_eventsへ1行をcommitし、commit後に10ms
 生データは [worker JSONL](performance/human-phase5-worker.jsonl)、[判定JSON](performance/human-phase5-worker-report.json)。commit時間の全サンプル、待機時間、WALの値を含む。再現例:
 
 ```powershell
+cargo build --release --locked --manifest-path src-tauri/Cargo.toml --example human_worker_benchmark --features human-benchmark
 $worker = (Resolve-Path src-tauri/target/release/examples/human_worker_benchmark.exe).Path
 1..5 | ForEach-Object { ./scripts/measure-human-benchmark.ps1 -BenchmarkExe $worker -IdKind uuid -Sizes 1000000 -Label "worker-main-$_" }
 python -B scripts/human_performance_report.py --worker --check docs/performance/human-phase5-worker.jsonl
@@ -239,3 +240,7 @@ npm run test:e2e -- --grep 'human performance:'
 性能ゲートの初回は、人間キャッシュが空の状態を対象とした。多数の別ソース履歴を既に保持した状態で新しいソースを初回取り込みする時間は未測定。その場合は旧正常キャッシュを維持する通常の差分・区間解決経路を使う。原本の変更sequenceがないため、1件変更やAIイベントだけの変更でも全確認が必要であり、更新頻度が高い原本では継続的なIO/CPU負荷になる。通知集約・最小間隔はこの負荷を制限するが、Reiの変更を前提にしない。
 
 同じ物理ファイルIDを保持したままのin-place上書きは別ソースとして識別できない。原本の自然な大量更新、全プラットフォームのネイティブ性能、短命プロセスを含む全OSメモリ、外部バックアップを含む完全消去の保証は今回の合成試験から導かない。必要時は設定OFFと明示キャッシュ削除後の原本再取り込みを使う。
+
+### 自動同期を1時間に変更した後のworker計測
+
+人間の製品側の自動確認は前回試行完了から1時間間隔になった。上記Phase 5の通知待機時間は当時の600ms/最小1秒ポリシーの測定であり、現在の待機時間を示さない。`human_worker_benchmark` のみ `--features human-benchmark` を指定してビルドし、合成fixtureに限って1秒間隔で実処理を測定する。通常のデスクトップはこのfeatureの有無にかかわらず `HumanRuntime::new` を使い、1時間間隔のままとする。UI・環境変数・保存済み設定に間隔変更口は追加しない。

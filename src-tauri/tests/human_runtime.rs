@@ -628,7 +628,7 @@ fn orphan_staging_cleanup_respects_selected_source_and_keeps_unrelated_files() {
 }
 
 #[test]
-fn wal_changes_ai_only_changes_manual_sync_and_coalesced_notifications_are_observed() {
+fn hourly_auto_requests_wait_while_manual_sync_observes_wal_and_ai_changes() {
     let tmp = tempfile::tempdir().unwrap();
     let cache = tmp.path().join("cache.db");
     drop(Store::open(&cache).unwrap());
@@ -651,7 +651,7 @@ fn wal_changes_ai_only_changes_manual_sync_and_coalesced_notifications_are_obser
         .unwrap();
     synced(&runtime, 1);
     runtime.request(false);
-    assert!(runtime.wait_idle(Duration::from_secs(3)));
+    assert!(!runtime.wait_idle(Duration::from_millis(1200)));
     assert_eq!(
         runtime.status().revision,
         1,
@@ -665,6 +665,9 @@ fn wal_changes_ai_only_changes_manual_sync_and_coalesced_notifications_are_obser
     for _ in 0..100 {
         runtime.request(false);
     }
+    assert!(!runtime.wait_idle(Duration::from_millis(1200)));
+    assert_eq!(runtime.status().revision, 1);
+    runtime.request(true);
     synced(&runtime, 2);
     assert!(runtime.wait_idle(Duration::from_secs(3)));
     assert_eq!(runtime.status().revision, 2);
@@ -673,6 +676,8 @@ fn wal_changes_ai_only_changes_manual_sync_and_coalesced_notifications_are_obser
         .execute_batch("INSERT INTO agent_events VALUES(1);")
         .unwrap();
     runtime.request(false);
+    assert!(!runtime.wait_idle(Duration::from_millis(50)));
+    runtime.request(true);
     synced(&runtime, 3);
     assert_eq!(runtime.period(0, 10000).unwrap().records[0].end, 4000);
     runtime.request(true);
@@ -681,7 +686,7 @@ fn wal_changes_ai_only_changes_manual_sync_and_coalesced_notifications_are_obser
 }
 
 #[test]
-fn unavailable_source_keeps_cache_and_periodic_check_retries_without_notifications() {
+fn unavailable_source_keeps_cache_and_manual_retry_does_not_wait_for_hourly_schedule() {
     let tmp = tempfile::tempdir().unwrap();
     let cache = tmp.path().join("cache.db");
     drop(Store::open(&cache).unwrap());
@@ -722,9 +727,10 @@ fn unavailable_source_keeps_cache_and_periodic_check_retries_without_notificatio
         root.join("storage.db"),
     )
     .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(35);
+    runtime.request(true);
+    let deadline = Instant::now() + Duration::from_secs(3);
     while runtime.status().revision < 1 {
-        assert!(Instant::now() < deadline, "periodic retry did not finish");
+        assert!(Instant::now() < deadline, "manual retry did not finish");
         std::thread::sleep(Duration::from_millis(20));
     }
     assert!(runtime.status().error.is_none());

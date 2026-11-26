@@ -102,6 +102,22 @@ test("human settings: legacy memory database, isolated IPC, WAL updates, OFF res
     db.exec(
       "UPDATE activity_records SET payload=json_set(payload,'$.durationEstimate',180)",
     );
+    const humanSidebar = page.getByRole("region", {
+      name: "人間のアクティビティ",
+      exact: true,
+    });
+    const humanSync = humanSidebar.getByRole("region", {
+      name: "人間のアクティビティ同期",
+      exact: true,
+    });
+    await expect(humanSync).toContainText("1時間ごと");
+    expect((await period()).records[0].end).toBe(captured + 120000);
+    await humanSync
+      .getByRole("button", {
+        name: "人間のアクティビティを再同期",
+        exact: true,
+      })
+      .click();
     await expect
       .poll(async () => (await period()).records[0]?.end, { timeout: 40000 })
       .toBe(captured + 180000);
@@ -322,11 +338,37 @@ test("human settings: legacy memory database, isolated IPC, WAL updates, OFF res
       const removeProject = fixture.prepare("DELETE FROM projects WHERE id=?");
       for (const id of fixtureProjects) removeProject.run(id);
       fixture.close();
+      const beforeCleanup = (await ipc<{ revision: number }>("human_status"))
+        .revision;
       await ipc("sync_logs");
+      await expect
+        .poll(async () => {
+          const status = await ipc<{ revision: number; busy: boolean }>(
+            "human_status",
+          );
+          return status.revision > beforeCleanup && !status.busy;
+        })
+        .toBe(true);
     }
     for (const file of [cachePath, `${cachePath}-wal`, `${cachePath}-shm`]) {
-      if (existsSync(file))
-        expect(readFileSync(file).includes(Buffer.from(marker))).toBe(false);
+      let bytes: Buffer = Buffer.alloc(0);
+      await expect
+        .poll(() => {
+          try {
+            bytes = existsSync(file) ? readFileSync(file) : Buffer.alloc(0);
+            return true;
+          } catch (error) {
+            if (
+              ["EBUSY", "ENOENT"].includes(
+                (error as NodeJS.ErrnoException).code ?? "",
+              )
+            )
+              return false;
+            throw error;
+          }
+        })
+        .toBe(true);
+      expect(bytes.includes(Buffer.from(marker))).toBe(false);
     }
     await page.getByRole("button", { name: "設定", exact: true }).click();
     await page.getByLabel("人間のアクティビティ機能を有効にする").uncheck();
@@ -1921,6 +1963,7 @@ test("human bands: dense day/week lanes, duration coverage and keyboard details"
     });
     if (await guide.count()) await guide.click();
     await page.getByRole("button", { name: "設定", exact: true }).click();
+    await page.getByLabel("テーマ", { exact: true }).selectOption("light");
     await page.getByLabel("れいの AI 実行履歴を取り込む").uncheck();
     await page.getByLabel("Claude Code の履歴を取り込む").uncheck();
     await page.getByLabel("人間のアクティビティ機能を有効にする").check();
@@ -1951,6 +1994,30 @@ test("human bands: dense day/week lanes, duration coverage and keyboard details"
     await expect(
       page.getByRole("region", { name: "表示期間の集計" }),
     ).toHaveCount(0);
+    const sidebarSync = page
+      .getByRole("region", { name: "人間のアクティビティ", exact: true })
+      .getByRole("region", { name: "人間のアクティビティ同期", exact: true });
+    await expect(sidebarSync).toContainText("1時間ごと");
+    await expect(page.locator(".workspace .human-sync")).toHaveCount(0);
+    const normalViewport =
+      page.viewportSize() ??
+      (await page.evaluate(() => ({
+        width: window.innerWidth,
+        height: window.innerHeight,
+      })));
+    await page.setViewportSize({ width: 1100, height: 600 });
+    const manual = sidebarSync.getByRole("button", {
+      name: "人間のアクティビティを再同期",
+      exact: true,
+    });
+    await manual.scrollIntoViewIfNeeded();
+    await expect(manual).toBeVisible();
+    await expect(
+      sidebarSync.locator("..").locator(".sidebar-label"),
+    ).toBeInViewport();
+    await page.getByRole("button", { name: "設定", exact: true }).click();
+    await page.getByRole("button", { name: "閉じる", exact: true }).click();
+    await page.setViewportSize(normalViewport);
     const first = page
       .locator('.human-time-lane[data-kind="entertainment"] button')
       .first();
@@ -1989,6 +2056,31 @@ test("human bands: dense day/week lanes, duration coverage and keyboard details"
     await expect(
       page.locator('.human-time-lane[data-kind="unknown"] button'),
     ).toHaveCount(0);
+    const missingRoot = path.join(root, "missing-human-source");
+    mkdirSync(missingRoot, { recursive: true });
+    await page.getByRole("button", { name: "設定", exact: true }).click();
+    await page.getByLabel("れい データディレクトリ").fill(missingRoot);
+    await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+    const warnedSettings = page.getByRole("dialog", {
+      name: "設定",
+      exact: true,
+    });
+    await expect(warnedSettings).toContainText(
+      "前回の正常なキャッシュは保持します",
+    );
+    await warnedSettings
+      .getByRole("button", { name: "閉じる", exact: true })
+      .click();
+    await expect(warnedSettings).toHaveCount(0);
+    await expect(sidebarSync.getByRole("alert")).toContainText(
+      "保存先を開けません",
+    );
+    await page.setViewportSize({ width: 1100, height: 600 });
+    await manual.scrollIntoViewIfNeeded();
+    await expect(manual).toBeVisible();
+    await expect(
+      sidebarSync.locator("..").locator(".sidebar-label"),
+    ).toBeInViewport();
     await page.getByRole("button", { name: "設定", exact: true }).click();
     await page.getByLabel("人間のアクティビティ機能を有効にする").uncheck();
     await page.getByRole("button", { name: "設定を保存", exact: true }).click();
