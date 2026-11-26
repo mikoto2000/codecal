@@ -169,6 +169,21 @@ async function withHuman(records = humanRecords) {
     },
   );
 }
+it("places human sync and retry at the bottom of the human sidebar section", async () => {
+  await withHuman();
+  await mount();
+  const filters = screen.getByRole("region", { name: "人間のアクティビティ" });
+  const sync = screen.getByRole("region", { name: "人間のアクティビティ同期" });
+  expect(filters).toContainElement(sync);
+  expect(filters.lastElementChild).toBe(sync);
+  expect(sync).toHaveTextContent("1時間ごと");
+  const retry = within(sync).getByRole("button", {
+    name: "人間のアクティビティを再同期",
+  });
+  await waitFor(() => expect(retry).toBeEnabled());
+  fireEvent.click(retry);
+  await waitFor(() => expect(api.humanSync).toHaveBeenCalled());
+});
 it("keeps human observed totals independent of AI and explains overlapping kind totals", async () => {
   await withHuman([
     humanRecords[0],
