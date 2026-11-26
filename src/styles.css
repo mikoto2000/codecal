@@ -658,6 +658,65 @@ h3 {
   );
   min-width: 0;
 }
+.human-time-bands {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.human-time-lane {
+  position: relative;
+  border-right: 1px solid var(--border);
+}
+.human-time-cell {
+  position: absolute;
+  z-index: 2;
+  left: 1px;
+  width: calc(100% - 2px);
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: color-mix(
+    in srgb,
+    var(--human-color) var(--coverage),
+    var(--surface)
+  );
+}
+.human-time-cell.point {
+  background: transparent;
+  border-top: 2px dotted var(--human-color);
+}
+.human-time-cell:hover,
+.human-time-cell:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: -1px;
+  z-index: 4;
+}
+.ai-time-blocks {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.ai-time-blocks > button {
+  pointer-events: auto;
+}
+.with-human-bands.with-ai .human-time-bands {
+  width: min(38%, 120px);
+}
+.with-human-bands.with-ai .ai-time-blocks {
+  left: min(38%, 120px);
+}
+.human-column-labels {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
+  text-align: center;
+}
+.human-column-labels span {
+  font-size: 8px;
+}
 .activity-block {
   position: absolute;
   z-index: 2;

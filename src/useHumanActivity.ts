@@ -17,20 +17,25 @@ export function useHumanActivity({
   to,
   zone,
   grouped = false,
-}: HumanQueryOptions & { grouped?: boolean }) {
+  binned = false,
+}: HumanQueryOptions & { grouped?: boolean; binned?: boolean }) {
   const fetchData = useCallback(
-    () => api.humanActivity(from, to, grouped, zone),
-    [from, to, grouped, zone],
+    () =>
+      binned
+        ? api.humanActivity(from, to, grouped, zone, true)
+        : api.humanActivity(from, to, grouped, zone),
+    [from, to, grouped, zone, binned],
   );
   const { response, ...state } = useHumanQuery({
     enabled,
-    queryKey: JSON.stringify([enabled, root, from, to, zone, grouped]),
+    queryKey: JSON.stringify([enabled, root, from, to, zone, grouped, binned]),
     fetchData,
     empty,
   });
   return {
     ...state,
     records: response.records,
+    bins: response.bins,
     diagnostics: response.diagnostics,
   };
 }

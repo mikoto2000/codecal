@@ -28,12 +28,14 @@ export const api = {
     to: number,
     grouped = false,
     timezone = "UTC",
+    binned = false,
   ) =>
     invoke<HumanActivityResponse>("human_activity", {
       from,
       to,
       grouped,
       timezone,
+      binned,
     }),
   humanStatus: () => invoke<HumanSyncStatus>("human_status"),
   humanSync: () => invoke<void>("sync_human"),
