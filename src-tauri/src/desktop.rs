@@ -516,6 +516,23 @@ pub async fn human_activity(
     .map_err(|_| "human_request_failed")?
 }
 #[tauri::command]
+pub async fn human_summary(
+    app: tauri::AppHandle,
+    from: i64,
+    to: i64,
+    timezone: String,
+    visible: Vec<crate::rei_human::HumanKind>,
+) -> Result<crate::human_summary::HumanSummaryResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.try_state::<AppState>()
+            .ok_or("human_not_ready")?
+            .human
+            .summary(from, to, &timezone, &visible)
+    })
+    .await
+    .map_err(|_| "human_request_failed")?
+}
+#[tauri::command]
 pub async fn clear_human_activity(
     app: tauri::AppHandle,
     all: bool,
@@ -729,6 +746,7 @@ pub fn run() {
             human_status,
             sync_human,
             human_activity,
+            human_summary,
             clear_human_activity,
             update_project,
             source_excerpt
