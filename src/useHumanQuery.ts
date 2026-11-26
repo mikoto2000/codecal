@@ -50,6 +50,16 @@ export function useHumanQuery<T>({
     loading: false,
     error: "",
   });
+  // OFF must also forget the old ON key, so a later ON cannot revive it.
+  if (!enabled && view.key !== "") {
+    setView({
+      key: "",
+      response: empty,
+      status: idle,
+      loading: false,
+      error: "",
+    });
+  }
   useEffect(() => {
     if (!enabled) return;
     let alive = true,

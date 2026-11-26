@@ -58,6 +58,24 @@ it("does not fetch periods, status or events while disabled", async () => {
   expect(api.humanStatus).not.toHaveBeenCalled();
   expect(api.humanEvents).not.toHaveBeenCalled();
 });
+it("does not revive a previous enabled response during a later ON transition", async () => {
+  const late = deferred<HumanActivityResponse>();
+  vi.mocked(api.humanActivity)
+    .mockResolvedValueOnce({
+      records: [{ start: 10, end: 20, kind: "unknown" }],
+      diagnostics: [],
+    })
+    .mockReturnValueOnce(late.promise);
+  const { result, rerender } = renderHook((p) => useHumanActivity(p), {
+    initialProps: options,
+  });
+  await waitFor(() => expect(result.current.records).toHaveLength(1));
+  rerender({ ...options, enabled: false });
+  expect(result.current.records).toEqual([]);
+  rerender({ ...options, enabled: true });
+  expect(result.current.records).toEqual([]);
+  await act(async () => late.resolve(empty));
+});
 
 it("discards older source responses and immediately hides data on OFF", async () => {
   const first = deferred<HumanActivityResponse>(),
