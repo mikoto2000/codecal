@@ -96,6 +96,46 @@ select {
 .human-totals .unselected {
   color: var(--muted);
 }
+.human-day-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+}
+.human-day-bar {
+  display: block;
+  height: 3px;
+  width: 100%;
+  border-radius: 2px;
+  background: var(--grid);
+}
+.human-day-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--human-color);
+}
+.human-day-bar > span.point {
+  min-width: 2px;
+}
+.human-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px 12px;
+  margin: 8px 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+.human-legend > span {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.human-legend i {
+  width: 12px;
+  height: 4px;
+}
 button {
   cursor: pointer;
   border: 1px solid var(--border);

@@ -196,6 +196,39 @@ it("keeps human observed totals independent of AI and explains overlapping kind 
     ).getByText("1h 0m"),
   ).toBeVisible();
 });
+it("adds independent human month bars while preserving AI heat levels and prefilter hours", async () => {
+  await withHuman();
+  await mount();
+  await waitFor(() => expect(api.humanActivity).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole("button", { name: "月" }));
+  const cell = await screen.findByRole("button", { name: /^2026-11-20 / });
+  expect(cell).toHaveAttribute("data-level", "2");
+  await act(async () => {});
+  expect(cell.querySelectorAll(".human-day-bar")).toHaveLength(3);
+  const bar = within(cell).getByRole("img", { name: "娯楽 推定 1h 0m" });
+  expect(
+    parseFloat((bar.firstElementChild as HTMLElement).style.width),
+  ).toBeCloseTo(100 / 24);
+  expect(
+    within(cell).getByRole("img", { name: "不明 推定 0h 0m 点の観測" }),
+  ).toBeVisible();
+  expect(
+    screen.getByText(/実際の日長に対する種別ごとの独立した比率/),
+  ).toBeVisible();
+  fireEvent.click(screen.getByRole("checkbox", { name: "人間の娯楽を表示" }));
+  expect(
+    within(cell).queryByRole("img", { name: /^娯楽 / }),
+  ).not.toBeInTheDocument();
+  expect(
+    within(
+      screen
+        .getByRole("checkbox", { name: "人間の娯楽を表示" })
+        .closest("label")!,
+    ).getByText("1h 0m"),
+  ).toBeVisible();
+  expect(cell).toHaveAttribute("data-level", "2");
+  expect(api.humanActivity).toHaveBeenCalledTimes(1);
+});
 it("keeps independent filter hours and targets bulk operations to their own lists", async () => {
   await withHuman();
   await mount();
