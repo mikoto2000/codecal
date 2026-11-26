@@ -1,8 +1,12 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { api } from "./api";
 import { useHumanQuery } from "./useHumanQuery";
 import type { HumanQueryOptions } from "./useHumanActivity";
-import type { HumanActivityKind, HumanSummaryResponse } from "./types";
+import type {
+  HumanActivityKind,
+  HumanDaySummary,
+  HumanSummaryResponse,
+} from "./types";
 const empty: HumanSummaryResponse = { days: [], diagnostics: [] };
 export function useHumanSummary({
   enabled,
@@ -29,5 +33,28 @@ export function useHumanSummary({
     fetchData,
     empty,
   });
-  return { ...state, days: response.days, diagnostics: response.diagnostics };
+  const scope = JSON.stringify([enabled, root, from, to, zone]);
+  const [prefilter, setPrefilter] = useState<{
+    scope: string;
+    days: HumanDaySummary[];
+  }>({ scope: "", days: [] });
+  if (!enabled && prefilter.scope !== "") setPrefilter({ scope: "", days: [] });
+  else if (enabled && prefilter.scope !== scope)
+    setPrefilter({
+      scope,
+      days: !state.loading && !state.error ? response.days : [],
+    });
+  else if (
+    enabled &&
+    !state.loading &&
+    !state.error &&
+    prefilter.days !== response.days
+  )
+    setPrefilter({ scope, days: response.days });
+  return {
+    ...state,
+    days: response.days,
+    unfilteredDays: enabled && prefilter.scope === scope ? prefilter.days : [],
+    diagnostics: response.diagnostics,
+  };
 }

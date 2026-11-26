@@ -42,7 +42,11 @@ export function useHumanQuery<T>({
 }) {
   const [attempt, setAttempt] = useState(0);
   const manualAttempt = useRef(0);
-  const key = JSON.stringify([queryKey, attempt]);
+  const [context, setContext] = useState({ queryKey, serial: 0 });
+  if (context.queryKey !== queryKey) {
+    setContext({ queryKey, serial: context.serial + 1 });
+  }
+  const key = JSON.stringify([queryKey, context.serial, attempt]);
   const [view, setView] = useState({
     key: "",
     response: empty,
