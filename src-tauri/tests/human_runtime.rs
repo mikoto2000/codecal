@@ -33,6 +33,10 @@ fn disabled_runtime_never_opens_missing_source_and_refuses_periods() {
         "human_activity_disabled"
     );
     assert_eq!(
+        runtime.period_bands(0, 1000, "UTC").unwrap_err(),
+        "human_activity_disabled"
+    );
+    assert_eq!(
         runtime.summary(0, 1000, "UTC", &[]).unwrap_err(),
         "human_activity_disabled"
     );
@@ -249,8 +253,10 @@ fn selected_cache_is_available_before_reopening_or_rescanning_source() {
     runtime.configure(preferences, || Ok(())).unwrap();
     receiver.recv_timeout(Duration::from_secs(2)).unwrap();
     let response = runtime.period(0, 10000);
+    let bins = runtime.period_bands(0, 10000, "UTC");
     barrier.wait();
     assert_eq!(response.unwrap().records.len(), 1);
+    assert_eq!(bins.unwrap().bins.unwrap().len(), 1);
 }
 
 #[test]
