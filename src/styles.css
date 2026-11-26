@@ -363,6 +363,13 @@ h3 {
 .human-filter-list .hint {
   font-size: 10px;
 }
+.human-filter-list > .sidebar-label {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-bottom: 4px;
+  background: var(--sidebar);
+}
 .sidebar.with-human > .eyebrow {
   margin-top: 20px;
 }
@@ -372,7 +379,7 @@ h3 {
 .sidebar.with-human .project-list {
   min-height: 64px;
   max-height: 30vh;
-  flex: 1 1 auto;
+  flex: 1 1 0;
 }
 .sidebar.with-human .sidebar-bottom {
   flex-shrink: 0;
