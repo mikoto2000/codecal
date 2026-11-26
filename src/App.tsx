@@ -16,6 +16,7 @@ import { useHumanActivity } from "./useHumanActivity";
 import { useHumanSummary } from "./useHumanSummary";
 import { HumanTotals } from "./HumanTotals";
 import { HumanDayBars } from "./HumanDayBars";
+import { HumanDayList } from "./HumanDayList";
 import {
   humanKinds,
   humanLabels,
@@ -1625,35 +1626,59 @@ export default function App({ initialDate }: { initialDate?: string }) {
           title={`${selectedDay} のアクティビティ`}
           close={() => setSelectedDay(null)}
         >
-          <div className="day-stats">
-            <p>
-              実稼働時間帯{" "}
-              <strong>{formatDuration(daySummary.elapsed_ms)}</strong>
-            </p>
-            <p>
-              延べ稼働時間{" "}
-              <strong>{formatDuration(daySummary.total_ms)}</strong>
-            </p>
-            <p>
-              実行ターン数 <strong>{daySummary.count}</strong>
-            </p>
-          </div>
-          {Object.entries(daySummary.projects).map(([id, ms]) => (
-            <p key={id}>
-              {projects.get(id)?.name} · {formatDuration(ms)}
-            </p>
-          ))}
-          <div className="day-turns">
-            {dayTurns.map((t) => (
-              <button key={t.id} onClick={() => openTurn(t)}>
-                <span>
-                  {projects.get(t.project_id)?.name} · {statusLabel[t.status]}
-                </span>
-                <small>{sourceLabel(t)}</small>
-                <strong>{t.prompt || "依頼内容なし"}</strong>
-              </button>
+          <section aria-label="AIの実行履歴">
+            {config.human_activity_enabled && <h3>AI の実行履歴</h3>}
+            <div className="day-stats">
+              <p>
+                実稼働時間帯{" "}
+                <strong>{formatDuration(daySummary.elapsed_ms)}</strong>
+              </p>
+              <p>
+                延べ稼働時間{" "}
+                <strong>{formatDuration(daySummary.total_ms)}</strong>
+              </p>
+              <p>
+                実行ターン数 <strong>{daySummary.count}</strong>
+              </p>
+            </div>
+            {Object.entries(daySummary.projects).map(([id, ms]) => (
+              <p key={id}>
+                {projects.get(id)?.name} · {formatDuration(ms)}
+              </p>
             ))}
-          </div>
+            <div className="day-turns">
+              {dayTurns.map((t) => (
+                <button key={t.id} onClick={() => openTurn(t)}>
+                  <span>
+                    {projects.get(t.project_id)?.name} · {statusLabel[t.status]}
+                  </span>
+                  <small>{sourceLabel(t)}</small>
+                  <strong>{t.prompt || "依頼内容なし"}</strong>
+                </button>
+              ))}
+            </div>
+            {config.human_activity_enabled && dayTurns.length === 0 && (
+              <p>AI の記録はありません。</p>
+            )}
+          </section>
+          {config.human_activity_enabled && (
+            <HumanDayList
+              date={selectedDay}
+              root={config.rei_root}
+              zone={zone}
+              visible={visibleHumanKinds}
+              grouping={grouping}
+              changeGrouping={setGrouping}
+              summary={humanSummary}
+              open={(segment) => {
+                setSelectedHuman({ context: humanContext, segment });
+                setSelectedDay(null);
+                setSelected(null);
+                setSelectedGroup(null);
+                setReturnGroup(null);
+              }}
+            />
+          )}
           <button
             className="primary"
             onClick={() => {

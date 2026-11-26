@@ -229,6 +229,40 @@ it("adds independent human month bars while preserving AI heat levels and prefil
   expect(cell).toHaveAttribute("data-level", "2");
   expect(api.humanActivity).toHaveBeenCalledTimes(1);
 });
+it("opens human-only monthly day details with a separate AI list and a zero-second observation", async () => {
+  await withHuman();
+  vi.mocked(api.snapshot).mockResolvedValue({
+    ...data,
+    projects: [],
+    turns: [],
+  });
+  render(<App initialDate="2026-11-20" />);
+  await screen.findByRole("button", { name: /^人間 娯楽 / });
+  fireEvent.click(screen.getByRole("button", { name: "月" }));
+  const cell = await screen.findByRole("button", { name: /^2026-11-20 / });
+  await act(async () => {});
+  fireEvent.click(cell);
+  const dialog = screen.getByRole("dialog", {
+    name: "2026-11-20 のアクティビティ",
+  });
+  expect(
+    within(dialog).getByRole("region", { name: "AIの実行履歴" }),
+  ).toHaveTextContent("AI の記録はありません");
+  const human = within(dialog).getByRole("region", {
+    name: "人間のアクティビティ（推定）",
+  });
+  const point = await within(human).findByRole("button", {
+    name: /^人間 不明 /,
+  });
+  expect(within(human).getByTestId("human-total")).toHaveTextContent("1h 30m");
+  fireEvent.click(point);
+  const detail = screen.getByRole("dialog", {
+    name: "人間のアクティビティ（推定）",
+  });
+  expect(detail).toHaveTextContent("0h 0m 0.000s");
+  expect(detail).not.toHaveTextContent("/rei");
+  expect(detail).not.toHaveTextContent("Sample project");
+});
 it("keeps independent filter hours and targets bulk operations to their own lists", async () => {
   await withHuman();
   await mount();
