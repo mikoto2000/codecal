@@ -12,7 +12,7 @@ use std::{
 
 const MIN_TIME: i64 = -62_135_596_800_000;
 const MAX_TIME: i64 = 253_402_300_799_999;
-fn validate_period(from: i64, to: i64) -> Result<(), HumanError> {
+pub(crate) fn validate_period(from: i64, to: i64) -> Result<(), HumanError> {
     if from >= to
         || from < MIN_TIME
         || to > MAX_TIME
@@ -129,7 +129,7 @@ impl HumanKind {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct HumanError(&'static str);
+pub struct HumanError(pub(crate) &'static str);
 impl fmt::Display for HumanError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.0)
