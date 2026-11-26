@@ -12,6 +12,36 @@ use std::{
 
 const MIN_TIME: i64 = -62_135_596_800_000;
 const MAX_TIME: i64 = 253_402_300_799_999;
+pub(crate) const SOURCE_FILES: [&str; 2] = ["storage.db", "memory.db"];
+
+/// Prefer the requested storage layout, while supporting Rei's injected
+/// primary DataSource (memory.db). Probe schema only; never fetch payloads.
+pub(crate) fn source_path(root: &Path) -> PathBuf {
+    let primary = root.join(SOURCE_FILES[0]);
+    let legacy = root.join(SOURCE_FILES[1]);
+    let probe = || -> rusqlite::Result<Option<bool>> {
+        if matches!(primary.try_exists(), Ok(false)) {
+            return Ok(None);
+        }
+        let conn = Connection::open_with_flags(&primary, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        conn.busy_timeout(Duration::from_millis(500))?;
+        conn.pragma_update(None, "query_only", true)?;
+        conn.pragma_update(None, "trusted_schema", false)?;
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='activity_records')",
+            [],
+            |r| r.get(0),
+        )
+        .map(Some)
+    };
+    match probe() {
+        Ok(Some(false)) => legacy,
+        Ok(None) if !matches!(legacy.try_exists(), Ok(false)) => legacy,
+        // Invalid/unreadable primary databases must fail in the normal reader,
+        // rather than silently showing a different physical source.
+        _ => primary,
+    }
+}
 pub(crate) fn validate_period(from: i64, to: i64) -> Result<(), HumanError> {
     if from >= to
         || from < MIN_TIME
@@ -442,6 +472,9 @@ pub struct HumanReader {
     _file: File,
 }
 impl HumanReader {
+    pub(crate) fn matches_path(&self, path: &Path) -> bool {
+        std::path::absolute(path).is_ok_and(|path| path == self.path)
+    }
     pub fn open(path: &Path) -> Result<Self, HumanError> {
         // Preserve the selected logical path: resolving a junction/symlink once
         // would hide later changes to its target from identity checks.

@@ -566,9 +566,16 @@ fn orphan_staging_cleanup_respects_selected_source_and_keeps_unrelated_files() {
     source(&first);
     let second = tmp.path().join("second");
     source(&second);
+    let legacy = rusqlite::Connection::open(first.join("memory.db")).unwrap();
+    legacy.execute_batch("CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT); INSERT INTO activity_records VALUES('synthetic-memory',1000,'{\"durationEstimate\":1}');").unwrap();
+    drop(legacy);
     let mut files = vec![];
-    for root in [&first, &second] {
-        let reader = codecal_lib::rei_human::HumanReader::open(&root.join("storage.db")).unwrap();
+    for path in [
+        first.join("storage.db"),
+        first.join("memory.db"),
+        second.join("storage.db"),
+    ] {
+        let reader = codecal_lib::rei_human::HumanReader::open(&path).unwrap();
         let stage = reader.stage_in(&staging, || false).unwrap();
         let file = std::fs::read_dir(&staging)
             .unwrap()
@@ -601,7 +608,8 @@ fn orphan_staging_cleanup_respects_selected_source_and_keeps_unrelated_files() {
             .staging_cleared
     );
     assert!(!files[0].exists());
-    assert!(files[1].exists());
+    assert!(!files[1].exists());
+    assert!(files[2].exists());
     assert!(unrelated.exists());
     assert!(
         runtime
@@ -609,7 +617,7 @@ fn orphan_staging_cleanup_respects_selected_source_and_keeps_unrelated_files() {
             .unwrap()
             .staging_cleared
     );
-    assert!(!files[1].exists());
+    assert!(!files[2].exists());
     assert!(unrelated.exists());
 }
 

@@ -160,6 +160,8 @@ mod tests {
         for file in [
             "storage.db",
             "storage.db-wal",
+            "memory.db",
+            "memory.db-wal",
             "projects.json",
             "PRIVATE_SCREENSHOT.png",
         ] {
@@ -175,11 +177,16 @@ mod tests {
             ..Config::default()
         };
         let targets = watch_targets(&c);
-        assert_eq!(targets.len(), 2);
+        assert_eq!(targets.len(), 4);
         assert!(targets.iter().all(|target| !target.recursive));
-        assert!(targets.iter().all(|target| ["storage.db", "storage.db-wal"]
-            .iter()
-            .any(|name| target.path.file_name().unwrap() == *name)));
+        assert!(targets.iter().all(|target| [
+            "storage.db",
+            "storage.db-wal",
+            "memory.db",
+            "memory.db-wal"
+        ]
+        .iter()
+        .any(|name| target.path.file_name().unwrap() == *name)));
         c.human_activity_enabled = false;
         assert!(watch_targets(&c).is_empty());
         c.rei_enabled = true;
@@ -245,6 +252,10 @@ fn watch_targets(config: &Config) -> Vec<WatchTarget> {
         let root = PathBuf::from(&config.rei_root);
         paths.push((root.join("storage.db"), false));
         paths.push((root.join("storage.db-wal"), false));
+        if config.human_activity_enabled {
+            paths.push((root.join("memory.db"), false));
+            paths.push((root.join("memory.db-wal"), false));
+        }
         if config.rei_enabled {
             paths.push((root.join("projects.json"), false));
             paths.push((root.join("projects"), true));
@@ -389,8 +400,8 @@ fn log_root_warnings(value: &Config) -> Vec<String> {
             warnings.push(format!("{message}: {}", rei_root.display()));
         }
     }
-    if value.human_activity_enabled && !rei_root.join("storage.db").is_file() {
-        warnings.push("人間のアクティビティ用 storage.db が見つかりません。前回の正常なキャッシュは保持します。".into());
+    if value.human_activity_enabled && !crate::rei_human::source_path(rei_root).is_file() {
+        warnings.push("人間のアクティビティ用 storage.db または memory.db が見つかりません。前回の正常なキャッシュは保持します。".into());
     }
     warnings
 }
@@ -624,7 +635,10 @@ pub fn run() {
                         if result.as_ref().is_ok_and(|event| {
                             event.paths.iter().any(|path| {
                                 path.file_name().is_some_and(|name| {
-                                    name == "storage.db" || name == "storage.db-wal"
+                                    name == "storage.db"
+                                        || name == "storage.db-wal"
+                                        || name == "memory.db"
+                                        || name == "memory.db-wal"
                                 })
                             })
                         }) {
@@ -692,6 +706,9 @@ pub fn run() {
                     };
                     let roots = watch_targets(&c);
                     if roots != watching {
+                        if let Some(state) = handle.try_state::<AppState>() {
+                            state.human.request(false);
+                        }
                         let mut watch_warnings = vec![];
                         if let Some(message) = &watcher_warning {
                             watch_warnings.push(message.clone());

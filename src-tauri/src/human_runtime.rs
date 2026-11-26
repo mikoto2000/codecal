@@ -226,12 +226,16 @@ impl HumanRuntime {
     ) -> Result<HumanClearResult, String> {
         let _operation = lock(&self.shared.operation);
         let gate = lock(&self.shared.gate);
-        let root = lock(&self.shared.control)
-            .preferences
-            .root
-            .join("storage.db");
-        let logical = crate::rei_human::logical_source_path(&root).map_err(|e| e.to_string())?;
-        let prefix = crate::rei_human::staging_prefix(&root).map_err(|e| e.to_string())?;
+        let root = lock(&self.shared.control).preferences.root.clone();
+        let paths = crate::rei_human::SOURCE_FILES.map(|name| root.join(name));
+        let logical = paths
+            .iter()
+            .map(|path| crate::rei_human::logical_source_path(path).map_err(|e| e.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let prefixes = paths
+            .iter()
+            .map(|path| crate::rei_human::staging_prefix(path).map_err(|e| e.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
         let mut store = cache(&self.shared.cache, false)?;
         let config = disabled_config(&store)?;
         #[derive(Deserialize)]
@@ -250,8 +254,8 @@ impl HumanRuntime {
             .map_err(|_| "cache_clear_failed")?;
         let tx = store.conn.transaction().map_err(|_| "cache_clear_failed")?;
         tx.execute(
-            "DELETE FROM human_activity_sources WHERE ?1 OR source_path=?2",
-            rusqlite::params![all, logical],
+            "DELETE FROM human_activity_sources WHERE ?1 OR source_path IN (?2,?3)",
+            rusqlite::params![all, logical[0], logical[1]],
         )
         .map_err(|_| "cache_clear_failed")?;
         tx.execute("INSERT INTO settings VALUES('config',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [&config]).map_err(|_| "cache_clear_failed")?;
@@ -271,8 +275,14 @@ impl HumanRuntime {
         // A stale job can be waiting for this gate; release it before waiting.
         drop(gate);
         let idle = self.wait_idle(Duration::from_secs(35));
-        let staging_cleared =
-            idle && purge_staging(&self.shared.staging, (!all).then_some(prefix.as_str()));
+        let staging_cleared = idle
+            && if all {
+                purge_staging(&self.shared.staging, None)
+            } else {
+                prefixes.iter().fold(true, |complete, prefix| {
+                    purge_staging(&self.shared.staging, Some(prefix)) && complete
+                })
+            };
         let compacted = store.conn.execute_batch("VACUUM;").is_ok()
             && store
                 .conn
@@ -305,10 +315,10 @@ impl HumanRuntime {
                 .parse::<chrono_tz::Tz>()
                 .map_err(|_| "invalid_timezone")?;
         }
-        let path = control.preferences.root.join("storage.db");
+        let root = control.preferences.root.clone();
         drop(control);
         let store = cache(&self.shared.cache, true)?;
-        let current = selected_source(&store, &path)?;
+        let current = selected_source(&store, &root)?;
         match current {
             Some(source) => store.human_activity_display(&source, from, to, timezone, grouped),
             None => store.human_activity(&[], from, to),
@@ -331,10 +341,10 @@ impl HumanRuntime {
         timezone
             .parse::<chrono_tz::Tz>()
             .map_err(|_| "invalid_timezone")?;
-        let path = control.preferences.root.join("storage.db");
+        let root = control.preferences.root.clone();
         drop(control);
         let store = cache(&self.shared.cache, true)?;
-        match selected_source(&store, &path)? {
+        match selected_source(&store, &root)? {
             Some(source) => store
                 .human_summary(&source, from, to, timezone, visible)
                 .map_err(|e| e.to_string()),
@@ -345,8 +355,9 @@ impl HumanRuntime {
         }
     }
 }
-fn selected_source(store: &Store, path: &Path) -> Result<Option<String>, String> {
-    match crate::rei_human::source_identity(path) {
+fn selected_source(store: &Store, root: &Path) -> Result<Option<String>, String> {
+    let path = crate::rei_human::source_path(root);
+    match crate::rei_human::source_identity(&path) {
         Ok(id) => Ok(Some(id)),
         Err(_) => {
             // Only a missing path can use its retained logical-source cache.
@@ -354,8 +365,22 @@ fn selected_source(store: &Store, path: &Path) -> Result<Option<String>, String>
             if !matches!(path.try_exists(), Ok(false)) {
                 return Err("source_unavailable".into());
             }
-            let logical = crate::rei_human::logical_source_path(path).map_err(|e| e.to_string())?;
-            store.conn.query_row("SELECT CASE WHEN typeof(source_id)='blob' THEN lower(hex(source_id)) ELSE source_id END FROM human_activity_sources WHERE source_path=? ORDER BY last_sync DESC,source_id DESC LIMIT 1", [&logical], |r| r.get::<_,String>(0)).optional().map_err(|_| "cache_read_failed".into())
+            let logical =
+                crate::rei_human::logical_source_path(&path).map_err(|e| e.to_string())?;
+            let both_missing = crate::rei_human::SOURCE_FILES
+                .iter()
+                .all(|name| matches!(root.join(name).try_exists(), Ok(false)));
+            let other = if both_missing {
+                crate::rei_human::SOURCE_FILES
+                    .iter()
+                    .map(|name| root.join(name))
+                    .find(|candidate| candidate != &path)
+                    .unwrap_or_else(|| path.clone())
+            } else {
+                path.clone()
+            };
+            let other = crate::rei_human::logical_source_path(&other).map_err(|e| e.to_string())?;
+            store.conn.query_row("SELECT CASE WHEN typeof(source_id)='blob' THEN lower(hex(source_id)) ELSE source_id END FROM human_activity_sources WHERE source_path IN (?1,?2) ORDER BY last_sync DESC,source_id DESC LIMIT 1", [&logical,&other], |r| r.get::<_,String>(0)).optional().map_err(|_| "cache_read_failed".into())
         }
     }
 }
@@ -429,18 +454,16 @@ fn run(shared: Arc<Shared>) {
             if cancelled() {
                 return Err("sync_cancelled".into());
             }
+            let path = crate::rei_human::source_path(&preferences.root);
             if reader
                 .as_ref()
-                .is_some_and(|r| r.verify_identity().is_err())
+                .is_some_and(|r| !r.matches_path(&path) || r.verify_identity().is_err())
             {
                 reader = None;
                 version = None;
             }
             if reader.is_none() {
-                reader = Some(
-                    HumanReader::open(&preferences.root.join("storage.db"))
-                        .map_err(|e| e.to_string())?,
-                );
+                reader = Some(HumanReader::open(&path).map_err(|e| e.to_string())?);
             }
             let source = reader.as_ref().ok_or("source_unavailable")?;
             if !force && version == Some(source.data_version().map_err(|e| e.to_string())?) {
