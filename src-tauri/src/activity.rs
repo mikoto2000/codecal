@@ -30,6 +30,25 @@ pub fn union_ms(ranges: &mut [(i64, i64)]) -> i64 {
     }
     total + current.map_or(0, |(s, e)| e - s)
 }
+pub(crate) fn next_day_boundary(local: &DateTime<Tz>) -> Result<i64, String> {
+    let tz = local.timezone();
+    let start = local.timestamp_millis();
+    let next_date = local.date_naive().succ_opt().ok_or("date overflow")?;
+    let midnight = next_date.and_hms_opt(0, 0, 0).ok_or("invalid midnight")?;
+    // Preserve the existing AI policy for midnight gaps and skipped dates.
+    (0..=2)
+        .find_map(|day| {
+            (0..=180).find_map(|minute| {
+                tz.from_local_datetime(
+                    &(midnight + Duration::days(day) + Duration::minutes(minute)),
+                )
+                .earliest()
+                .filter(|instant| instant.timestamp_millis() > start)
+            })
+        })
+        .map(|instant| instant.timestamp_millis())
+        .ok_or_else(|| "unresolvable date boundary".into())
+}
 pub fn aggregate(intervals: &[Interval], timezone: &str) -> Result<Vec<Day>, String> {
     let tz: Tz = timezone.parse().map_err(|_| "invalid timezone")?;
     let mut days: BTreeMap<String, (Day, Vec<(i64, i64)>)> = BTreeMap::new();
@@ -40,22 +59,7 @@ pub fn aggregate(intervals: &[Interval], timezone: &str) -> Result<Vec<Day>, Str
             let local = DateTime::<Utc>::from_timestamp_millis(start)
                 .ok_or("invalid timestamp")?
                 .with_timezone(&tz);
-            let next_date = local.date_naive().succ_opt().ok_or("date overflow")?;
-            let midnight = next_date.and_hms_opt(0, 0, 0).ok_or("invalid midnight")?;
-            // A historical zone change may skip an entire date (e.g. Apia 2011).
-            // Search through the next two dates as well as ordinary midnight gaps.
-            let boundary = (0..=2)
-                .find_map(|day| {
-                    (0..=180).find_map(|m| {
-                        tz.from_local_datetime(
-                            &(midnight + Duration::days(day) + Duration::minutes(m)),
-                        )
-                        .earliest()
-                        .filter(|instant| instant.timestamp_millis() > start)
-                    })
-                })
-                .ok_or("unresolvable date boundary")?
-                .timestamp_millis();
+            let boundary = next_day_boundary(&local)?;
             let stop = end.min(boundary);
             if stop <= start {
                 return Err("invalid date boundary".into());

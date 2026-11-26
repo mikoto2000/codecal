@@ -96,6 +96,212 @@ test("human settings: isolated IPC, WAL updates, OFF restart and confirmed cache
       .poll(async () => (await period()).records[0]?.end, { timeout: 40000 })
       .toBe(captured + 180000);
     const cachePath = path.join(appdata, "codecal.db");
+    const insert = db.prepare("INSERT INTO activity_records VALUES(?,?,?)");
+    for (const [id, offset, duration, kind] of [
+      ["human-touch", 180000, 60, "ENTERTAINMENT"],
+      ["human-gap", 241000, 60, "NON_ENTERTAINMENT"],
+      ["human-point", 400000, 0, "UNCERTAIN"],
+    ] as const) {
+      insert.run(
+        id,
+        captured + offset,
+        JSON.stringify({
+          durationEstimate: duration,
+          foreground: { title: marker },
+          detection: { diagnostics: { entertainmentDisposition: kind } },
+        }),
+      );
+    }
+    const fixture = new DatabaseSync(cachePath);
+    const fixtureProjects = [
+      "human-test-project",
+      ...Array.from({ length: 100 }, (_, i) => `human-layout-${i}`),
+    ];
+    fixture.exec("BEGIN");
+    const projectInsert = fixture.prepare(
+      "INSERT INTO projects VALUES(?,?,?,?,?)",
+    );
+    for (const id of fixtureProjects)
+      projectInsert.run(
+        id,
+        `C:/synthetic/${id}`,
+        id === "human-test-project" ? "AI overlap" : id,
+        "#14b8a6",
+        captured,
+      );
+    fixture
+      .prepare("INSERT INTO sessions VALUES(?,?,?,?)")
+      .run(
+        "human-test-session",
+        "human-test-project",
+        captured,
+        captured + 600000,
+      );
+    fixture
+      .prepare(
+        "INSERT INTO turns(id,session_id,turn_id,project_id,start,end,status,prompt,source) VALUES(?,?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        "human-test-session:turn",
+        "human-test-session",
+        "turn",
+        "human-test-project",
+        captured,
+        captured + 600000,
+        "completed",
+        "synthetic AI overlap",
+        "codex",
+      );
+    fixture
+      .prepare(
+        "INSERT INTO turns(id,session_id,turn_id,project_id,start,end,status,prompt,source) VALUES(?,?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        "human-test-session:short",
+        "human-test-session",
+        "short",
+        "human-test-project",
+        captured + 241000,
+        captured + 242000,
+        "completed",
+        "synthetic short AI overlap",
+        "codex",
+      );
+    fixture.exec("COMMIT");
+    try {
+      await ipc("sync_logs");
+      await page.getByLabel("表示日").fill("2026-11-20");
+      await expect(page.locator(".human-block")).toHaveCount(3);
+      const ai = page.getByRole("button", { name: /^AI overlap 10:00/ });
+      const entertainment = page.getByRole("button", { name: /^人間 娯楽 / });
+      await expect(ai).toBeVisible();
+      await page.locator(".week-scroll").evaluate((el) => {
+        el.scrollTop = 480;
+      });
+      const [aiBox, humanBox] = await Promise.all([
+        ai.boundingBox(),
+        entertainment.boundingBox(),
+      ]);
+      expect(aiBox && humanBox).toBeTruthy();
+      expect(
+        aiBox!.x + aiBox!.width <= humanBox!.x ||
+          humanBox!.x + humanBox!.width <= aiBox!.x,
+      ).toBe(true);
+      await expect(page.getByTestId("total-elapsed")).toHaveText("0h 10m");
+      await ai.click();
+      await expect(page.getByRole("dialog")).toContainText(
+        "synthetic AI overlap",
+      );
+      await page.getByRole("button", { name: "閉じる", exact: true }).click();
+      await entertainment.click();
+      const detail = page.getByRole("dialog", {
+        name: "人間のアクティビティ（推定）",
+      });
+      await expect(detail).toContainText("推定終了時刻");
+      await expect(detail).not.toContainText(marker);
+      await expect(detail).not.toContainText(humanRoot);
+      await expect(
+        detail.getByRole("button", { name: "ログの該当箇所を表示" }),
+      ).toHaveCount(0);
+      await page.keyboard.press("Escape");
+      await page
+        .getByRole("checkbox", { name: "人間の娯楽を表示", exact: true })
+        .uncheck();
+      await expect(entertainment).toHaveCount(0);
+      await expect(ai).toBeVisible();
+      await expect(
+        page
+          .getByRole("checkbox", { name: "人間の娯楽を表示", exact: true })
+          .locator(".."),
+      ).toContainText("0h 4m");
+      await page
+        .getByRole("button", { name: "人間の種別をすべてON", exact: true })
+        .click();
+      await page.getByLabel("ブロックの表示単位").selectOption("turn");
+      await expect(
+        page.getByRole("button", { name: /^人間 娯楽 / }),
+      ).toHaveCount(2);
+      await page.getByRole("button", { name: /^AI overlap 10:04/ }).click();
+      await expect(page.getByRole("dialog")).toContainText(
+        "synthetic short AI overlap",
+      );
+      await page.keyboard.press("Escape");
+      await page.getByLabel("ブロックの表示単位").selectOption("group");
+      await expect(entertainment).toHaveCount(1);
+      await page.getByRole("button", { name: /^人間 不明 .*点の観測/ }).click();
+      await expect(
+        page.getByRole("dialog", { name: "人間のアクティビティ（推定）" }),
+      ).toContainText("0h 0m 0.000s");
+      await page.keyboard.press("Escape");
+      await page
+        .getByRole("button", { name: "プロジェクトをすべてOFF", exact: true })
+        .click();
+      await expect(ai).toHaveCount(0);
+      await expect(entertainment).toBeVisible();
+      await page
+        .getByRole("button", { name: "プロジェクトをすべてON", exact: true })
+        .click();
+      const viewport = await page.evaluate(() => ({
+        width: innerWidth,
+        height: innerHeight,
+      }));
+      await page.setViewportSize({ width: 920, height: 640 });
+      await page
+        .getByRole("button", { name: "案内を閉じる", exact: true })
+        .click();
+      const list = await page
+        .getByRole("region", { name: "人間のアクティビティ", exact: true })
+        .boundingBox();
+      const settings = await page
+        .getByRole("button", { name: "設定", exact: true })
+        .boundingBox();
+      expect(list!.y + list!.height).toBeLessThanOrEqual(640);
+      expect(settings!.y + settings!.height).toBeLessThanOrEqual(640);
+      const unknown = page.getByRole("checkbox", {
+        name: "人間の不明を表示",
+        exact: true,
+      });
+      await unknown.focus();
+      await page.keyboard.press("Space");
+      await expect(unknown).not.toBeChecked();
+      await page
+        .getByRole("button", { name: "人間の種別をすべてON", exact: true })
+        .click();
+      for (const theme of ["light", "dark"]) {
+        await page.getByRole("button", { name: "設定", exact: true }).click();
+        await page.getByLabel("テーマ", { exact: true }).selectOption(theme);
+        await page
+          .getByRole("button", { name: "設定を保存", exact: true })
+          .click();
+        await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+        await expect(entertainment).toBeVisible();
+        await entertainment.scrollIntoViewIfNeeded();
+        await entertainment.click();
+        await expect(
+          page.getByRole("dialog", { name: "人間のアクティビティ（推定）" }),
+        ).toBeVisible();
+        await page.keyboard.press("Escape");
+        await page.screenshot({
+          path: path.join("test-results", `human-${theme}.png`),
+        });
+      }
+      await page.setViewportSize(viewport);
+      await expect(page.locator("body")).not.toContainText(marker);
+    } finally {
+      fixture
+        .prepare("DELETE FROM turns WHERE id=?")
+        .run("human-test-session:turn");
+      fixture
+        .prepare("DELETE FROM turns WHERE id=?")
+        .run("human-test-session:short");
+      fixture
+        .prepare("DELETE FROM sessions WHERE id=?")
+        .run("human-test-session");
+      const removeProject = fixture.prepare("DELETE FROM projects WHERE id=?");
+      for (const id of fixtureProjects) removeProject.run(id);
+      fixture.close();
+      await ipc("sync_logs");
+    }
     for (const file of [cachePath, `${cachePath}-wal`, `${cachePath}-shm`]) {
       if (existsSync(file))
         expect(readFileSync(file).includes(Buffer.from(marker))).toBe(false);
@@ -135,13 +341,13 @@ test("human settings: isolated IPC, WAL updates, OFF restart and confirmed cache
     }
     expect(
       db.prepare("SELECT count(*) AS n FROM activity_records").get()?.n,
-    ).toBe(1);
+    ).toBe(4);
     expect(
       db.prepare("SELECT payload FROM activity_records").get()?.payload,
     ).toContain(marker);
     await page.getByLabel("人間のアクティビティ機能を有効にする").check();
     await page.getByRole("button", { name: "設定を保存", exact: true }).click();
-    await expect.poll(async () => (await period()).records.length).toBe(1);
+    await expect.poll(async () => (await period()).records.length).toBe(4);
     await page.getByRole("button", { name: "設定", exact: true }).click();
     await page.getByLabel("人間のアクティビティ機能を有効にする").uncheck();
     await page.getByRole("button", { name: "設定を保存", exact: true }).click();
@@ -220,10 +426,27 @@ async function launch(waitForReady = true) {
     .poll(() => browser.contexts().flatMap((c) => c.pages()).length)
     .toBeGreaterThan(0);
   page = browser.contexts().flatMap((c) => c.pages())[0];
+  page.on("pageerror", (error) =>
+    console.error(`Native renderer error: ${error.message}`),
+  );
   await page.waitForLoadState("domcontentloaded");
   if (!waitForReady) return;
   // Fixture times and labels use Japan time; CI runners usually use UTC.
-  await page.getByRole("button", { name: "設定", exact: true }).click();
+  try {
+    const settings = page.getByRole("button", { name: "設定", exact: true });
+    await settings.waitFor({
+      state: "visible",
+      timeout: Math.max(1, 60000 - (Date.now() - startupBegan)),
+    });
+    console.info(`Native UI ready after ${Date.now() - startupBegan}ms`);
+    await settings.click();
+  } catch (error) {
+    console.error(
+      `Native startup document: ${await page.locator("body").innerText()}`,
+    );
+    await page.screenshot({ path: "test-results/native-startup-debug.png" });
+    throw error;
+  }
   await page.getByLabel("タイムゾーン", { exact: true }).fill("Asia/Tokyo");
   await page.getByRole("button", { name: "設定を保存", exact: true }).click();
   await expect(
@@ -591,7 +814,7 @@ test("grouped activity keeps gaps out of totals and opens every original turn", 
     await expect(page.locator(".activity-block")).toHaveCount(1);
     await expect(
       page.getByRole("combobox", {
-        name: "作業ブロックの表示単位",
+        name: "ブロックの表示単位",
         exact: true,
       }),
     ).toHaveValue("group");
@@ -619,7 +842,7 @@ test("grouped activity keeps gaps out of totals and opens every original turn", 
     await expect(page.getByRole("dialog")).toContainText("作業C");
     await page.getByRole("button", { name: "閉じる", exact: true }).click();
     await page
-      .getByRole("combobox", { name: "作業ブロックの表示単位", exact: true })
+      .getByRole("combobox", { name: "ブロックの表示単位", exact: true })
       .selectOption("turn");
     await expect(page.locator(".activity-block")).toHaveCount(3);
     await expect(page.getByTestId("total-elapsed")).toHaveText("0h 55m");

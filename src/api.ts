@@ -9,8 +9,18 @@ import type {
   HumanClearResult,
 } from "./types";
 export const api = {
-  humanActivity: (from: number, to: number) =>
-    invoke<HumanActivityResponse>("human_activity", { from, to }),
+  humanActivity: (
+    from: number,
+    to: number,
+    grouped = false,
+    timezone = "UTC",
+  ) =>
+    invoke<HumanActivityResponse>("human_activity", {
+      from,
+      to,
+      grouped,
+      timezone,
+    }),
   humanStatus: () => invoke<HumanSyncStatus>("human_status"),
   humanSync: () => invoke<void>("sync_human"),
   humanClear: (all: boolean) =>
