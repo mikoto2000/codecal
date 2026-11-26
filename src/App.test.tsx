@@ -8,6 +8,12 @@ import {
   within,
 } from "@testing-library/react";
 import App from "./App";
+import { DateTime } from "luxon";
+import {
+  indexHumanActivity,
+  summarizeHumanDays,
+  humanKinds,
+} from "./human-calendar";
 import { api } from "./api";
 import type { Snapshot, HumanActivity } from "./types";
 vi.mock("./api", () => ({
@@ -20,6 +26,7 @@ vi.mock("./api", () => ({
     excerpt: vi.fn(),
     events: vi.fn(),
     humanActivity: vi.fn(),
+    humanSummary: vi.fn(),
     humanStatus: vi.fn(),
     humanEvents: vi.fn(),
     humanSync: vi.fn(),
@@ -83,6 +90,7 @@ beforeEach(() => {
     records: [],
     diagnostics: [],
   });
+  vi.mocked(api.humanSummary).mockResolvedValue({ days: [], diagnostics: [] });
   vi.mocked(api.humanStatus).mockResolvedValue({
     generation: 2,
     busy: false,
@@ -125,7 +133,69 @@ async function withHuman(records = humanRecords) {
     config: { ...boot.config, human_activity_enabled: true },
   });
   vi.mocked(api.humanActivity).mockResolvedValue({ records, diagnostics: [] });
+  vi.mocked(api.humanSummary).mockImplementation(
+    async (from, to, zone, visible) => {
+      const dates: string[] = [];
+      for (
+        let day = DateTime.fromMillis(from, { zone });
+        day.toMillis() < to;
+        day = day.plus({ days: 1 })
+      )
+        dates.push(day.toISODate()!);
+      const index = indexHumanActivity(records, dates, zone);
+      return {
+        days: dates
+          .filter((date) => index.has(date))
+          .map((date) => ({
+            date,
+            day_length_ms:
+              DateTime.fromISO(date, { zone }).plus({ days: 1 }).toMillis() -
+              DateTime.fromISO(date, { zone }).toMillis(),
+            total_ms: summarizeHumanDays(index, [date], visible).total_ms,
+            kinds: summarizeHumanDays(index, [date], humanKinds).kinds,
+            observed: [
+              ...new Set(index.get(date)!.segments.map((s) => s.kind)),
+            ],
+          })),
+        diagnostics: [],
+      };
+    },
+  );
 }
+it("keeps human observed totals independent of AI and explains overlapping kind totals", async () => {
+  await withHuman([
+    humanRecords[0],
+    { ...humanRecords[1], start: Date.parse("2026-11-20T11:00Z") },
+  ]);
+  await mount();
+  const region = screen.getByRole("region", { name: "人間の観測推定時間" });
+  await waitFor(() =>
+    expect(within(region).getByTestId("human-total")).toHaveTextContent(
+      "1h 30m",
+    ),
+  );
+  expect(within(region).getByLabelText("娯楽の推定時間")).toHaveTextContent(
+    "1h 0m",
+  );
+  expect(within(region).getByLabelText("非娯楽の推定時間")).toHaveTextContent(
+    "1h 0m",
+  );
+  expect(region).toHaveTextContent("種別間で重なる時間");
+  expect(screen.getByTestId("total-elapsed")).toHaveTextContent("2h 0m");
+  fireEvent.click(screen.getByRole("checkbox", { name: "人間の娯楽を表示" }));
+  await waitFor(() =>
+    expect(within(region).getByTestId("human-total")).toHaveTextContent(
+      "1h 0m",
+    ),
+  );
+  expect(
+    within(
+      screen
+        .getByRole("checkbox", { name: "人間の娯楽を表示" })
+        .closest("label")!,
+    ).getByText("1h 0m"),
+  ).toBeVisible();
+});
 it("keeps independent filter hours and targets bulk operations to their own lists", async () => {
   await withHuman();
   await mount();

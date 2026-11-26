@@ -66,6 +66,36 @@ select {
 .human-sync p {
   margin: 0 0 8px;
 }
+.human-totals {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 20px;
+  flex-shrink: 0;
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.human-totals h2 {
+  font-size: 12px;
+  margin: 0;
+}
+.human-totals > div {
+  display: flex;
+  gap: 7px;
+  font-size: 12px;
+}
+.human-totals p {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+.human-totals .unselected {
+  color: var(--muted);
+}
 button {
   cursor: pointer;
   border: 1px solid var(--border);

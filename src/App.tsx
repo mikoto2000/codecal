@@ -13,6 +13,8 @@ import {
 import { DateTime } from "luxon";
 import { api } from "./api";
 import { useHumanActivity } from "./useHumanActivity";
+import { useHumanSummary } from "./useHumanSummary";
+import { HumanTotals } from "./HumanTotals";
 import {
   humanKinds,
   humanLabels,
@@ -343,6 +345,15 @@ export default function App({ initialDate }: { initialDate?: string }) {
     to: humanTo,
     zone,
     grouped: view !== "month" && grouping === "group",
+  });
+  const visibleHumanKinds = humanKinds.filter((kind) => !hiddenHuman.has(kind));
+  const humanSummary = useHumanSummary({
+    enabled: config?.human_activity_enabled === true,
+    root: config?.rei_root ?? "",
+    from: humanFrom,
+    to: humanTo,
+    zone,
+    visible: visibleHumanKinds,
   });
   const visibleDays =
     view === "month"
@@ -914,6 +925,16 @@ export default function App({ initialDate }: { initialDate?: string }) {
             <small>終了不明のターンも含む</small>
           </div>
         </section>
+        {config.human_activity_enabled && (
+          <HumanTotals
+            days={humanSummary.days}
+            dates={visibleDays}
+            visible={visibleHumanKinds}
+            loading={humanSummary.loading}
+            error={humanSummary.error}
+            retry={humanSummary.retry}
+          />
+        )}
         <main className="calendar-card" aria-busy={viewBusy}>
           {viewBusy && (
             <div
