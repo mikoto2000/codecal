@@ -455,7 +455,7 @@ impl HumanReader {
         }
         .map_err(|_| HumanError("staging_failed"))?;
         let conn = Connection::open(file.path()).map_err(|_| HumanError("staging_failed"))?;
-        conn.execute_batch("PRAGMA cache_size=-2048; CREATE TABLE records(native_id TEXT PRIMARY KEY,captured_at INTEGER,duration_ms INTEGER,kind TEXT,content_hash BLOB) WITHOUT ROWID;").map_err(|_| HumanError("staging_failed"))?;
+        conn.execute_batch("PRAGMA cache_size=-2048; CREATE TABLE records(native_id TEXT,captured_at INTEGER,duration_ms INTEGER,kind TEXT,content_hash BLOB);").map_err(|_| HumanError("staging_failed"))?;
         let staging = conn
             .unchecked_transaction()
             .map_err(|_| HumanError("staging_failed"))?;
@@ -511,6 +511,12 @@ impl HumanReader {
             .map_err(|_| HumanError("source_read_failed"))?;
         self.verify_identity()?;
         staging.commit().map_err(|_| HumanError("staging_failed"))?;
+        // Append during the source snapshot, then sort only minimized fields.
+        // A covering index avoids random heap lookups for UUID-ordered merging.
+        check()?;
+        conn.execute_batch("CREATE INDEX records_native_order ON records(native_id,captured_at,duration_ms,kind,content_hash);").map_err(|_| HumanError("staging_failed"))?;
+        check()?;
+        self.verify_identity()?;
         let source_path = self.path.to_string_lossy().to_string();
         #[cfg(windows)]
         let source_path = source_path.to_lowercase();
