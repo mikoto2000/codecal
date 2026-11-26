@@ -242,11 +242,11 @@ export default function App({ initialDate }: { initialDate?: string }) {
     const d = await api.snapshot(timezone);
     if (n === generation.current) setData(d);
   }, []);
-  const synchronize = useCallback(async () => {
+  const synchronize = useCallback(async (human = true) => {
     setSyncing(true);
     setProgress("ログを走査中");
     try {
-      const result = await api.sync();
+      const result = await api.sync(human);
       await reload(zoneRef.current);
       setProgress(
         `${result.files} ファイル確認 · ${Math.round(result.bytes_read / 1024)} KB 読み込み`,
@@ -308,7 +308,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
         await reload(b.config.timezone);
         if (alive) {
           setLoading(false);
-          await synchronize();
+          await synchronize(false);
         }
       } catch (e) {
         if (alive) {
@@ -543,7 +543,7 @@ export default function App({ initialDate }: { initialDate?: string }) {
     if (warnings.length === 0) setShowSettings(false);
     try {
       await reload(draft.timezone);
-      if (sourceChanged) await synchronize();
+      if (sourceChanged) await synchronize(false);
     } catch (e) {
       if (warnings.length) setSettingsError(String(e));
       else setError(String(e));

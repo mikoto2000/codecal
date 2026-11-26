@@ -475,10 +475,12 @@ fn sync_app(app: &tauri::AppHandle) -> Result<Progress, String> {
     result
 }
 #[tauri::command]
-pub async fn sync_logs(app: tauri::AppHandle) -> Result<Progress, String> {
+pub async fn sync_logs(app: tauri::AppHandle, human: Option<bool>) -> Result<Progress, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        if let Some(state) = app.try_state::<AppState>() {
-            state.human.request(true);
+        if human.unwrap_or(true) {
+            if let Some(state) = app.try_state::<AppState>() {
+                state.human.request(true);
+            }
         }
         sync_app(&app)
     })
