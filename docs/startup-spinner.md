@@ -1,0 +1,29 @@
+# 起動時の空白と表示の引継ぎ
+
+## 切り分け
+
+旧版のindex.htmlは空のrootのみで、ReactのAppが初めてcommitしてから既存の「データベースを確認／移行しています」スピナーを表示していた。DB処理はその後に開始する。一方、window-stateプラグインはnative window ready時点でVISIBLEを復元し、WebViewの内容が用意される前にウィンドウを見せていた。
+
+ユーザー環境で起動中の実行形式はdebug版だった。旧製品ビルドの隔離したWebViewでも、JavaScriptを無効にするとrootの子要素は0、初期描画の記録もなく、DB準備開始前に空白になることを再現した。この試験の通常起動は操作可能になるまで6359msだったが、これは白画面だけの実測値ではない。実ユーザーの過去の起動で何秒をWebView初期化・Vite変換・module実行が占めたかは未計測で、開発版と製品版の時間も同一とはみなさない。
+
+## 修正
+
+追加の製品計測ではCSSを後段に移しても、document開始後約8657msまで初期HTML内のscriptに到達せず、JS/CSS各資産の取得は約6〜12ms、DB準備は約997msだった。最終的な最初の進行表示をHTMLだけに任せず、Windowsではrun開始時に専用メッセージループを持つWin32の起動スピナーを表示する。WebView2・HTML・React・DBとは独立して動き、HTML側が表示できた時点で閉じる。起動中の×はアプリの正常終了を要求し、早期取消しではDB初期化を開始しない。DPI変更、OSのシステム色・アニメーション軽減設定に従う。GDIオブジェクトは描画後に解放し、ネイティブウィンドウ状態は保存しない。
+
+index.html内の小さなCSSとHTMLに依存なしの起動表示を置き、Reactやmoduleが動かなくてもスピナーと案内を描けるようにした。アプリ本体のCSSはmodule実行後に非同期で読み込み、初期HTMLの描画やclassic scriptを待たせない。public/startup.jsはReact/Vite moduleへの依存を持たないclassic scriptとし、HTMLの準備後にshow_startupを呼ぶ。それまではnative windowを非表示に保つ。Windowsの最初の進行表示はネイティブ、続いて初期HTML、既存Reactスピナーへ引き継ぐ。他OSでは最初のHTML表示からスピナーを出す。
+
+位置・サイズ・最大化の復元は維持し、表示時点だけをプラグインのVISIBLE復元から切り離す。scriptが実行できない場合も、about:blank以外のpage load完了時に静的HTMLを見せる。Reactの初回commit後に外側の初期表示を外し、既存のDB準備スピナー・失敗時の再試行画面へ引き継ぐ。15秒を超えるmodule待機は読込中のまま再読み込みボタンを案内し、読込失敗ではスピナーを止めて再読み込みを提供する。
+
+初期表示はlight/darkと動き軽減に対応する。外部通信・パス・DB内容の表示は追加しない。
+
+## 計測
+
+window.**CODECAL_STARTUP**.timingsに、その起動だけの少数の数値を保持する。shell_ms/module_ms/styles_ms/react_ms/database_start_ms/database_ready_msは各documentのperformance.now()を基準とする。native_shell_msとWindowsのnative_splash_msはRustのrun開始からそれぞれHTML表示要求・ネイティブ初回描画までの時間であり、両者は時計の原点が違うので直接差し引かない。native E2Eのcold startupと再読込で記録し、実ユーザーのDBやログは使用しない。ファイルへの常時ログ保存や外部送信はしない。
+
+## 最終製品ビルドの確認
+
+Windowsの新しい合成WebViewプロファイルでは、実際に可視となったネイティブ初回描画がrun開始から17ms、HTML表示要求が14482msだった。document基準では初期script到達10104ms、module実行10132ms、CSS完了10158ms、React commit10212ms、DB開始10338ms・完了11194ms。大きな待機がReact/DB以前にあることを確認し、その間もネイティブスピナーを表示できた。OS・セキュリティソフト・プロファイル・開発/製品版によって時間は変わり、起動時間短縮の保証ではない。
+
+実機試験では同じプロセスIDとウィンドウクラスでネイティブ画面を特定し、PrintWindowで実際の描画を確認してから×相当のWM_CLOSEを送る。プロセスは正常終了し、codecal.dbは作成されなかった。非表示ランチャーのSTARTUPINFOに最初のShowWindowが上書きされる条件も明示表示で対応した。JavaScript停止中の初期HTML、動き軽減・dark、moduleエラーと再読み込み、React/DBへの時刻順序も確認した。
+
+画面例: [Windowsネイティブ](screenshots/startup-native.png) / [初期HTML](screenshots/startup-html.png) / [dark](screenshots/startup-html-dark.png)。HTMLの例はJavaScriptを停止しているためnoscriptの説明も表示される。

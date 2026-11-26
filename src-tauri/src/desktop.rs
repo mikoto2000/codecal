@@ -285,6 +285,38 @@ struct StartupContext {
     local: PathBuf,
     previous: PathBuf,
     initialization: Mutex<()>,
+    began: Instant,
+    #[cfg(windows)]
+    startup_window: crate::startup_window::NativeStartup,
+}
+#[derive(Serialize)]
+struct StartupPresentation {
+    native_shell_ms: u64,
+    native_splash_ms: Option<u64>,
+}
+#[tauri::command]
+fn show_startup(
+    window: tauri::WebviewWindow,
+    state: State<'_, StartupContext>,
+) -> Result<StartupPresentation, String> {
+    window
+        .show()
+        .map_err(|_| "起動画面を表示できませんでした".to_string())?;
+    #[cfg(windows)]
+    state.startup_window.close();
+    Ok(StartupPresentation {
+        native_shell_ms: state.began.elapsed().as_millis() as u64,
+        native_splash_ms: {
+            #[cfg(windows)]
+            {
+                state.startup_window.shown_ms()
+            }
+            #[cfg(not(windows))]
+            {
+                None
+            }
+        },
+    })
 }
 #[derive(Serialize)]
 pub struct Bootstrap {
@@ -595,8 +627,15 @@ pub async fn source_excerpt(app: tauri::AppHandle, id: String) -> Result<String,
     .map_err(|e| e.to_string())?
 }
 pub fn run() {
+    let began = Instant::now();
+    #[cfg(windows)]
+    let startup_window = crate::startup_window::NativeStartup::new(began);
     tauri::Builder::default()
-        .setup(|app| {
+        .setup(move |app| {
+            #[cfg(windows)]
+            if !startup_window.bind(app.handle()) {
+                return Ok(());
+            }
             let (local, previous) = if let Some(dir) = std::env::var_os("CODECAL_DATA_DIR") {
                 let dir = std::path::absolute(PathBuf::from(dir))?;
                 (dir.clone(), dir)
@@ -610,8 +649,7 @@ pub fn run() {
                     .with_state_flags(
                         tauri_plugin_window_state::StateFlags::SIZE
                             | tauri_plugin_window_state::StateFlags::POSITION
-                            | tauri_plugin_window_state::StateFlags::MAXIMIZED
-                            | tauri_plugin_window_state::StateFlags::VISIBLE,
+                            | tauri_plugin_window_state::StateFlags::MAXIMIZED,
                     )
                     .build(),
             )?;
@@ -620,6 +658,9 @@ pub fn run() {
                 local,
                 previous,
                 initialization: Mutex::new(()),
+                began,
+                #[cfg(windows)]
+                startup_window,
             });
             // Register window-state before creating the main window so its
             // ready callback restores geometry and installs event tracking.
@@ -629,7 +670,20 @@ pub fn run() {
                 .windows
                 .first()
                 .ok_or("main window configuration missing")?;
-            tauri::WebviewWindowBuilder::from_config(app.handle(), window_config)?.build()?;
+            tauri::WebviewWindowBuilder::from_config(app.handle(), window_config)?
+                .on_page_load(|window, payload| {
+                    // Keep a local HTML error/shell visible even if its script fails.
+                    if payload.event() == tauri::webview::PageLoadEvent::Finished
+                        && payload.url().scheme() != "about"
+                    {
+                        let _ = window.show();
+                        #[cfg(windows)]
+                        if let Some(state) = window.try_state::<StartupContext>() {
+                            state.startup_window.close();
+                        }
+                    }
+                })
+                .build()?;
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 use notify::{RecursiveMode, Watcher};
@@ -763,6 +817,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            show_startup,
             bootstrap,
             save_config,
             snapshot,

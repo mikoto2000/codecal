@@ -9,6 +9,8 @@ mod migrations;
 pub mod parser;
 pub mod rei;
 pub mod rei_human;
+#[cfg(all(feature = "desktop", windows))]
+mod startup_window;
 pub mod store;
 #[cfg(feature = "desktop")]
 pub use desktop::run;
