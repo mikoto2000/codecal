@@ -353,6 +353,8 @@ pub struct HumanActivity {
 }
 #[derive(Debug, Serialize)]
 pub struct HumanActivityResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bins: Option<Vec<crate::human_bands::HumanTimeBin>>,
     pub records: Vec<HumanActivity>,
     pub diagnostics: Vec<HumanDiagnostic>,
 }
@@ -788,6 +790,24 @@ impl crate::store::Store {
             diagnostics,
         })
     }
+    pub fn human_activity_bands(
+        &self,
+        source: &str,
+        from: i64,
+        to: i64,
+        timezone: &str,
+    ) -> Result<HumanActivityResponse, HumanError> {
+        let mut bins = crate::human_bands::Accumulator::new(from, to, timezone)?;
+        let diagnostics =
+            self.visit_human_source(source, from, to, false, |_id, _hash, record| {
+                bins.add(record)
+            })?;
+        Ok(HumanActivityResponse {
+            records: vec![],
+            bins: Some(bins.finish()),
+            diagnostics,
+        })
+    }
     /// Display grouping is intentionally restricted to one selected source.
     pub fn human_activity_display(
         &self,
@@ -845,6 +865,7 @@ impl crate::store::Store {
                 Ok(())
             })?;
         Ok(HumanActivityResponse {
+            bins: None,
             records: out,
             diagnostics,
         })
@@ -1123,6 +1144,7 @@ impl crate::store::Store {
         }
         records.sort_by_key(|r| (r.start, r.end, r.kind));
         Ok(HumanActivityResponse {
+            bins: None,
             records,
             diagnostics: diagnostics(counts),
         })
