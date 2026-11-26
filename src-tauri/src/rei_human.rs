@@ -826,7 +826,8 @@ impl crate::store::Store {
             }
             tx.execute("INSERT INTO human_activity_records SELECT ?,native_id,captured_at,duration_ms,kind,content_hash,captured_at+duration_ms FROM human_changes WHERE true ON CONFLICT(source_id,native_id) DO UPDATE SET captured_at=excluded.captured_at,duration_ms=excluded.duration_ms,kind=excluded.kind,content_hash=excluded.content_hash,effective_end=excluded.effective_end WHERE content_hash<>excluded.content_hash",[&key]).map_err(cache_write_error)?;
             if build_indexes {
-                tx.execute_batch("CREATE INDEX human_activity_start ON human_activity_records(source_id,captured_at,native_id);").map_err(cache_write_error)?;
+                tx.execute_batch(crate::migrations::HUMAN_START_INDEX_SQL)
+                    .map_err(cache_write_error)?;
             }
             if changed > 4096 {
                 conflicts = resolve_all(&tx, &key, &cancelled)?;
