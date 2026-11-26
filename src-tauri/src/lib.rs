@@ -3,6 +3,7 @@ pub mod claude;
 #[cfg(feature = "desktop")]
 mod desktop;
 pub mod human_runtime;
+pub mod human_summary;
 mod migrations;
 pub mod parser;
 pub mod rei;

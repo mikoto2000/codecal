@@ -15,7 +15,11 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { HumanActivityResponse, Snapshot } from "../../src/types";
+import type {
+  HumanActivityResponse,
+  HumanSummaryResponse,
+  Snapshot,
+} from "../../src/types";
 
 test("human settings: isolated IPC, WAL updates, OFF restart and confirmed cache clear", async () => {
   test.setTimeout(120000);
@@ -479,6 +483,233 @@ async function stop() {
   }
   await browser?.close().catch(() => {});
 }
+test("human month: dense observations, independent bars and filtered day records", async () => {
+  test.setTimeout(120000);
+  mkdirSync(path.join(logs, "sessions"), { recursive: true });
+  const humanRoot = path.join(root, "dense-human-only");
+  mkdirSync(humanRoot, { recursive: true });
+  const writer = new DatabaseSync(path.join(humanRoot, "storage.db"));
+  const marker = "PRIVATE_DENSE_MONTH_CONTENT";
+  const captured = Date.parse("2026-11-20T01:00:00Z");
+  writer.exec(
+    "PRAGMA journal_mode=WAL; CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT); BEGIN",
+  );
+  const insert = writer.prepare("INSERT INTO activity_records VALUES(?,?,?)");
+  const payload = (duration: number, kind: string) =>
+    JSON.stringify({
+      durationEstimate: duration,
+      foreground: { title: marker },
+      detection: { diagnostics: { entertainmentDisposition: kind } },
+    });
+  for (let i = 0; i < 50_001; i++)
+    insert.run(
+      `dense-${String(i).padStart(6, "0")}`,
+      Date.parse("2026-11-01T00:00Z") + i,
+      payload(1, "ENTERTAINMENT"),
+    );
+  for (const [id, start, duration, kind] of [
+    ["a", captured, 180, "ENTERTAINMENT"],
+    ["b", captured + 180000, 60, "ENTERTAINMENT"],
+    ["c", captured + 241000, 60, "NON_ENTERTAINMENT"],
+    ["d", captured + 400000, 0, "UNCERTAIN"],
+    ["long-ent", captured + 86400000, 14400, "ENTERTAINMENT"],
+    ["long-non", captured + 86400000 + 14400000, 7200, "NON_ENTERTAINMENT"],
+  ] as const)
+    insert.run(id, start, payload(duration, kind));
+  writer.exec("COMMIT");
+  writer.close();
+  const ipc = <T>(command: string, args: Record<string, unknown> = {}) =>
+    page.evaluate(
+      ({ command, args }) =>
+        (
+          window as unknown as {
+            __TAURI_INTERNALS__: {
+              invoke: (
+                command: string,
+                args: Record<string, unknown>,
+              ) => Promise<unknown>;
+            };
+          }
+        ).__TAURI_INTERNALS__.invoke(command, args),
+      { command, args },
+    ) as Promise<T>;
+  const args = {
+    from: Date.parse("2026-11-01T00:00Z"),
+    to: Date.parse("2026-12-01T00:00Z"),
+    timezone: "Asia/Tokyo",
+    visible: ["entertainment", "non_entertainment", "unknown"],
+  };
+  try {
+    await launch();
+    await expect(ipc("human_summary", args)).rejects.toThrow(
+      /human_activity_disabled/,
+    );
+    await page.getByRole("button", { name: "設定", exact: true }).click();
+    await page.getByLabel("れいの AI 実行履歴を取り込む").uncheck();
+    await page.getByLabel("人間のアクティビティ機能を有効にする").check();
+    await page.getByLabel("れい データディレクトリ").fill(humanRoot);
+    await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+    await expect
+      .poll(
+        async () =>
+          (await ipc<HumanSummaryResponse>("human_summary", args)).days.length,
+        { timeout: 40000 },
+      )
+      .toBe(3);
+    const response = await ipc<HumanSummaryResponse>("human_summary", args);
+    const day = response.days.find((day) => day.date === "2026-11-20")!;
+    expect(day.total_ms).toBe(300000);
+    expect(day.kinds).toEqual({
+      entertainment: 240000,
+      non_entertainment: 60000,
+      unknown: 0,
+    });
+    expect(day.day_length_ms).toBe(86400000);
+    expect(day.observed.sort()).toEqual([
+      "entertainment",
+      "non_entertainment",
+      "unknown",
+    ]);
+    const wire = JSON.stringify(response);
+    expect(wire.length).toBeLessThan(4096);
+    for (const forbidden of [
+      marker,
+      humanRoot,
+      "source_id",
+      "native_id",
+      "foreground",
+      "UNCERTAIN",
+    ])
+      expect(wire).not.toContain(forbidden);
+    await expect(
+      ipc("human_activity", { from: args.from, to: args.to }),
+    ).rejects.toThrow(/period_too_dense/);
+    await page.getByLabel("表示日").fill("2026-11-20");
+    const guide = page.getByRole("button", {
+      name: "案内を閉じる",
+      exact: true,
+    });
+    if (await guide.isVisible()) await guide.click();
+    await page.getByRole("button", { name: "月", exact: true }).click();
+    const cell = page.getByRole("button", { name: /^2026-11-20 / });
+    await expect(cell).toHaveAttribute("data-level", "0");
+    await expect(
+      cell.getByRole("img", { name: "娯楽 推定 0h 4m", exact: true }),
+    ).toBeVisible();
+    await expect(
+      cell.getByRole("img", { name: "非娯楽 推定 0h 1m", exact: true }),
+    ).toBeVisible();
+    await expect(
+      cell.getByRole("img", { name: "不明 推定 0h 0m 点の観測", exact: true }),
+    ).toBeVisible();
+    const longCell = page.getByRole("button", { name: /^2026-11-21 / });
+    await expect(
+      longCell.getByRole("img", { name: "娯楽 推定 4h 0m", exact: true }),
+    ).toBeVisible();
+    await expect(
+      longCell.getByRole("img", { name: "非娯楽 推定 2h 0m", exact: true }),
+    ).toBeVisible();
+    await expect(page.locator(".empty-state")).toHaveCount(0);
+    await cell.click();
+    let dialog = page.getByRole("dialog", {
+      name: "2026-11-20 のアクティビティ",
+      exact: true,
+    });
+    await expect(
+      dialog.getByRole("region", { name: "AIの実行履歴", exact: true }),
+    ).toContainText("AI の記録はありません");
+    let human = dialog.getByRole("region", {
+      name: "人間のアクティビティ（推定）",
+      exact: true,
+    });
+    await expect(
+      human.getByRole("button", { name: /^人間 娯楽 / }),
+    ).toHaveCount(1);
+    await expect(human.getByTestId("human-total")).toHaveText("0h 5m");
+    await human
+      .getByLabel("人間の日別表示単位", { exact: true })
+      .selectOption("turn");
+    await expect(
+      human.getByRole("button", { name: /^人間 娯楽 / }),
+    ).toHaveCount(2);
+    await dialog.getByRole("button", { name: "閉じる", exact: true }).click();
+    await page
+      .getByRole("checkbox", { name: "人間の非娯楽を表示", exact: true })
+      .uncheck();
+    await expect(cell.getByRole("img", { name: /^非娯楽 / })).toHaveCount(0);
+    await cell.click();
+    dialog = page.getByRole("dialog", {
+      name: "2026-11-20 のアクティビティ",
+      exact: true,
+    });
+    human = dialog.getByRole("region", {
+      name: "人間のアクティビティ（推定）",
+      exact: true,
+    });
+    await expect(
+      human.getByRole("button", { name: /^人間 娯楽 / }),
+    ).toHaveCount(2);
+    await expect(
+      human.getByRole("button", { name: /^人間 非娯楽 / }),
+    ).toHaveCount(0);
+    await expect(human.getByTestId("human-total")).toHaveText("0h 4m");
+    await human.getByRole("button", { name: /^人間 不明 / }).click();
+    const detail = page.getByRole("dialog", {
+      name: "人間のアクティビティ（推定）",
+      exact: true,
+    });
+    await expect(detail).toContainText("0h 0m 0.000s");
+    for (const forbidden of [marker, humanRoot, "dense-", "UNCERTAIN"])
+      await expect(detail).not.toContainText(forbidden);
+    await page.keyboard.press("Escape");
+    await page
+      .getByRole("button", { name: "人間の種別をすべてON", exact: true })
+      .click();
+    const viewport = await page.evaluate(() => ({
+      width: innerWidth,
+      height: innerHeight,
+    }));
+    await page.setViewportSize({ width: 920, height: 640 });
+    const monthArea = await page.locator(".month-view").boundingBox();
+    expect(monthArea!.height).toBeGreaterThanOrEqual(180);
+    for (const theme of ["light", "dark"]) {
+      await page.getByRole("button", { name: "設定", exact: true }).click();
+      await page.getByLabel("テーマ", { exact: true }).selectOption(theme);
+      await page
+        .getByRole("button", { name: "設定を保存", exact: true })
+        .click();
+      await expect(
+        cell.getByRole("img", { name: "娯楽 推定 0h 4m", exact: true }),
+      ).toBeVisible();
+      await cell.click();
+      await expect(
+        page.getByRole("dialog", {
+          name: "2026-11-20 のアクティビティ",
+          exact: true,
+        }),
+      ).toBeVisible();
+      await page.keyboard.press("Escape");
+      await page.screenshot({
+        path: path.join("test-results", `human-month-${theme}.png`),
+      });
+    }
+    await page.setViewportSize(viewport);
+    await page.getByRole("button", { name: "設定", exact: true }).click();
+    await page.getByLabel("人間のアクティビティ機能を有効にする").uncheck();
+    await page.getByRole("button", { name: "設定を保存", exact: true }).click();
+    await expect(page.locator(".human-day-bars")).toHaveCount(0);
+    await expect(
+      page.getByRole("region", { name: "人間の観測推定時間", exact: true }),
+    ).toHaveCount(0);
+    await expect(ipc("human_summary", args)).rejects.toThrow(
+      /human_activity_disabled/,
+    );
+    await expect(page.locator("body")).not.toContainText(marker);
+  } finally {
+    await stop();
+  }
+});
+
 test("native Tauri: import, calendars, detail, watch append and restart SQLite", async () => {
   // Includes a 35-second watcher reconciliation allowance and native restarts.
   test.setTimeout(120000);

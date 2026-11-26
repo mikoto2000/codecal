@@ -13,12 +13,15 @@ import {
 import { DateTime } from "luxon";
 import { api } from "./api";
 import { useHumanActivity } from "./useHumanActivity";
+import { useHumanSummary } from "./useHumanSummary";
+import { HumanTotals } from "./HumanTotals";
+import { HumanDayBars } from "./HumanDayBars";
+import { HumanDayList } from "./HumanDayList";
 import {
   humanKinds,
   humanLabels,
   humanColors,
   indexHumanActivity,
-  summarizeHumanDays,
   type HumanSegment,
 } from "./human-calendar";
 import { useTimelineZoom } from "./useTimelineZoom";
@@ -337,13 +340,23 @@ export default function App({ initialDate }: { initialDate?: string }) {
     .plus({ days: 1 })
     .toMillis();
   const human = useHumanActivity({
-    enabled: config?.human_activity_enabled === true,
+    enabled: config?.human_activity_enabled === true && view !== "month",
     root: config?.rei_root ?? "",
     from: humanFrom,
     to: humanTo,
     zone,
     grouped: view !== "month" && grouping === "group",
   });
+  const visibleHumanKinds = humanKinds.filter((kind) => !hiddenHuman.has(kind));
+  const humanSummary = useHumanSummary({
+    enabled: config?.human_activity_enabled === true,
+    root: config?.rei_root ?? "",
+    from: humanFrom,
+    to: humanTo,
+    zone,
+    visible: visibleHumanKinds,
+  });
+  const humanState = view === "month" ? humanSummary : human;
   const visibleDays =
     view === "month"
       ? days.filter((d) => d.slice(0, 7) === anchor.slice(0, 7))
@@ -353,9 +366,27 @@ export default function App({ initialDate }: { initialDate?: string }) {
     [human.records, days, zone],
   );
   const humanHours = useMemo(
-    () => summarizeHumanDays(humanIndex, visibleDays),
-    [humanIndex, visibleDays],
+    () =>
+      Object.fromEntries(
+        humanKinds.map((kind) => [
+          kind,
+          humanSummary.unfilteredDays
+            .filter((day) => visibleDays.includes(day.date))
+            .reduce((sum, day) => sum + day.kinds[kind], 0),
+        ]),
+      ) as Record<HumanActivityKind, number>,
+    [humanSummary.unfilteredDays, visibleDays],
   );
+  const humanByDate = useMemo(
+    () => new Map(humanSummary.unfilteredDays.map((day) => [day.date, day])),
+    [humanSummary.unfilteredDays],
+  );
+  const humanVisibleDates = humanSummary.unfilteredDays.filter((day) =>
+    day.observed.some((kind) => !hiddenHuman.has(kind)),
+  );
+  const humanHoursUnavailable =
+    !!humanSummary.error ||
+    (humanSummary.loading && humanSummary.unfilteredDays.length === 0);
   const humanSegments = useMemo(
     () =>
       days
@@ -377,8 +408,8 @@ export default function App({ initialDate }: { initialDate?: string }) {
     zone,
     config?.rei_root,
     config?.human_activity_enabled,
-    human.status.generation,
-    human.status.revision,
+    humanSummary.status.generation,
+    humanSummary.status.revision,
     grouping,
     [...hiddenHuman].sort(),
   ]);
@@ -694,7 +725,11 @@ export default function App({ initialDate }: { initialDate?: string }) {
                   style={{ background: humanColors[kind] }}
                 />
                 <span className="project-name">{humanLabels[kind]}</span>
-                <small>{formatDuration(humanHours.kinds[kind])}</small>
+                <small>
+                  {humanHoursUnavailable
+                    ? "—"
+                    : formatDuration(humanHours[kind])}
+                </small>
               </label>
             ))}
             <p className="hint">観測に基づく推定時間</p>
@@ -717,7 +752,11 @@ export default function App({ initialDate }: { initialDate?: string }) {
           </button>
         </div>
       </aside>
-      <div className="workspace">
+      <div
+        className={
+          config.human_activity_enabled ? "workspace with-human" : "workspace"
+        }
+      >
         <header className="topbar">
           <div>
             <span className="eyebrow">ACTIVITY CALENDAR</span>
@@ -849,36 +888,36 @@ export default function App({ initialDate }: { initialDate?: string }) {
           <section
             className="human-sync"
             aria-label="人間のアクティビティ同期"
-            aria-busy={human.status.busy || human.loading}
+            aria-busy={humanState.status.busy || humanState.loading}
           >
             <p role="status">
-              {human.status.busy
+              {humanState.status.busy
                 ? "人間のアクティビティを同期中…"
-                : human.loading
+                : humanState.loading
                   ? "人間のアクティビティを取得中…"
-                  : human.error || human.status.error
+                  : humanState.error || humanState.status.error
                     ? "人間のアクティビティの同期・取得結果を確認してください。"
-                    : human.status.last_success !== null
+                    : humanState.status.last_success !== null
                       ? "人間のアクティビティの前回同期は完了しています。"
                       : "人間のアクティビティの同期結果を待っています。"}
             </p>
-            {(human.error || human.status.error) && (
+            {(humanState.error || humanState.status.error) && (
               <p role="alert">
-                {human.error === "period_too_dense"
-                  ? "この期間の人間の記録が多すぎます。日・週表示へ移動してください。"
+                {humanState.error === "period_too_dense"
+                  ? "この期間の人間の記録が多すぎます。まとめ表示または短い期間に変更してください。"
                   : "人間のアクティビティを読み取れません。設定または原本を確認して再試行してください。"}
               </p>
             )}
-            {human.diagnostics.length > 0 && (
+            {humanState.diagnostics.length > 0 && (
               <p>
                 ソース全体の診断:{" "}
-                {human.diagnostics.reduce((sum, d) => sum + d.count, 0)}
+                {humanState.diagnostics.reduce((sum, d) => sum + d.count, 0)}
                 件（不正な観測や長い推定など）
               </p>
             )}
             <button
-              onClick={human.retry}
-              disabled={human.status.busy || human.loading}
+              onClick={humanState.retry}
+              disabled={humanState.status.busy || humanState.loading}
             >
               人間のアクティビティを再同期
             </button>
@@ -914,6 +953,16 @@ export default function App({ initialDate }: { initialDate?: string }) {
             <small>終了不明のターンも含む</small>
           </div>
         </section>
+        {config.human_activity_enabled && (
+          <HumanTotals
+            days={humanSummary.days}
+            dates={visibleDays}
+            visible={visibleHumanKinds}
+            loading={humanSummary.loading}
+            error={humanSummary.error}
+            retry={humanSummary.retry}
+          />
+        )}
         <main className="calendar-card" aria-busy={viewBusy}>
           {viewBusy && (
             <div
@@ -974,9 +1023,12 @@ export default function App({ initialDate }: { initialDate?: string }) {
             !syncing &&
             !human.loading &&
             summary.count === 0 &&
-            (view === "month" || humanSegments.length === 0) && (
+            (view === "month"
+              ? humanVisibleDates.length === 0
+              : humanSegments.length === 0) && (
               <div className="empty-state">
-                {data.turns.length === 0 && human.records.length === 0 ? (
+                {data.turns.length === 0 &&
+                humanSummary.unfilteredDays.length === 0 ? (
                   <>
                     <p>取り込まれた稼働履歴がありません</p>
                     <p>ログディレクトリと診断を確認してください。</p>
@@ -1301,6 +1353,17 @@ export default function App({ initialDate }: { initialDate?: string }) {
                   {days.map((d) => {
                     const sum = summarizeDays(activity, [d]);
                     const ms = sum[metric];
+                    const humanDay = humanByDate.get(d);
+                    const humanDescription =
+                      config.human_activity_enabled && humanDay
+                        ? visibleHumanKinds
+                            .filter((kind) => humanDay.observed.includes(kind))
+                            .map(
+                              (kind) =>
+                                `${humanLabels[kind]} ${formatDuration(humanDay.kinds[kind])}${humanDay.kinds[kind] === 0 ? " 点の観測" : ""}`,
+                            )
+                            .join("、")
+                        : "";
                     const level = heatLevel(
                       ms,
                       config?.thresholds ?? [1, 3, 6],
@@ -1312,12 +1375,19 @@ export default function App({ initialDate }: { initialDate?: string }) {
                         className={
                           d.slice(0, 7) !== anchor.slice(0, 7) ? "outside" : ""
                         }
-                        aria-label={`${d} ${formatDuration(ms)}`}
+                        aria-label={`${d} ${formatDuration(ms)}${humanDescription ? ` 人間 推定 ${humanDescription}` : ""}`}
                         onClick={() => setSelectedDay(d)}
                       >
                         <strong>{Number(d.slice(-2))}</strong>
                         <span>{formatDuration(ms)}</span>
                         {sum.count > 0 && <small>{sum.count} turns</small>}
+                        {config.human_activity_enabled &&
+                          humanByDate.has(d) && (
+                            <HumanDayBars
+                              day={humanByDate.get(d)!}
+                              visible={visibleHumanKinds}
+                            />
+                          )}
                       </button>
                     );
                   })}
@@ -1334,6 +1404,20 @@ export default function App({ initialDate }: { initialDate?: string }) {
                   時間
                 </small>
               </div>
+              {config.human_activity_enabled && (
+                <div className="human-legend" aria-label="人間の活動バーの凡例">
+                  {humanKinds.map((kind) => (
+                    <span key={kind}>
+                      <i style={{ background: humanColors[kind] }} />
+                      {humanLabels[kind]}
+                    </span>
+                  ))}
+                  <small>
+                    人間の観測推定時間 ·
+                    実際の日長に対する種別ごとの独立した比率。種別間の時間は重なる場合があります。点は0秒です。
+                  </small>
+                </div>
+              )}
             </div>
           )}
         </main>
@@ -1546,35 +1630,59 @@ export default function App({ initialDate }: { initialDate?: string }) {
           title={`${selectedDay} のアクティビティ`}
           close={() => setSelectedDay(null)}
         >
-          <div className="day-stats">
-            <p>
-              実稼働時間帯{" "}
-              <strong>{formatDuration(daySummary.elapsed_ms)}</strong>
-            </p>
-            <p>
-              延べ稼働時間{" "}
-              <strong>{formatDuration(daySummary.total_ms)}</strong>
-            </p>
-            <p>
-              実行ターン数 <strong>{daySummary.count}</strong>
-            </p>
-          </div>
-          {Object.entries(daySummary.projects).map(([id, ms]) => (
-            <p key={id}>
-              {projects.get(id)?.name} · {formatDuration(ms)}
-            </p>
-          ))}
-          <div className="day-turns">
-            {dayTurns.map((t) => (
-              <button key={t.id} onClick={() => openTurn(t)}>
-                <span>
-                  {projects.get(t.project_id)?.name} · {statusLabel[t.status]}
-                </span>
-                <small>{sourceLabel(t)}</small>
-                <strong>{t.prompt || "依頼内容なし"}</strong>
-              </button>
+          <section aria-label="AIの実行履歴">
+            {config.human_activity_enabled && <h3>AI の実行履歴</h3>}
+            <div className="day-stats">
+              <p>
+                実稼働時間帯{" "}
+                <strong>{formatDuration(daySummary.elapsed_ms)}</strong>
+              </p>
+              <p>
+                延べ稼働時間{" "}
+                <strong>{formatDuration(daySummary.total_ms)}</strong>
+              </p>
+              <p>
+                実行ターン数 <strong>{daySummary.count}</strong>
+              </p>
+            </div>
+            {Object.entries(daySummary.projects).map(([id, ms]) => (
+              <p key={id}>
+                {projects.get(id)?.name} · {formatDuration(ms)}
+              </p>
             ))}
-          </div>
+            <div className="day-turns">
+              {dayTurns.map((t) => (
+                <button key={t.id} onClick={() => openTurn(t)}>
+                  <span>
+                    {projects.get(t.project_id)?.name} · {statusLabel[t.status]}
+                  </span>
+                  <small>{sourceLabel(t)}</small>
+                  <strong>{t.prompt || "依頼内容なし"}</strong>
+                </button>
+              ))}
+            </div>
+            {config.human_activity_enabled && dayTurns.length === 0 && (
+              <p>AI の記録はありません。</p>
+            )}
+          </section>
+          {config.human_activity_enabled && (
+            <HumanDayList
+              date={selectedDay}
+              root={config.rei_root}
+              zone={zone}
+              visible={visibleHumanKinds}
+              grouping={grouping}
+              changeGrouping={setGrouping}
+              summary={humanSummary}
+              open={(segment) => {
+                setSelectedHuman({ context: humanContext, segment });
+                setSelectedDay(null);
+                setSelected(null);
+                setSelectedGroup(null);
+                setReturnGroup(null);
+              }}
+            />
+          )}
           <button
             className="primary"
             onClick={() => {

@@ -12,7 +12,7 @@ use std::{
 
 const MIN_TIME: i64 = -62_135_596_800_000;
 const MAX_TIME: i64 = 253_402_300_799_999;
-fn validate_period(from: i64, to: i64) -> Result<(), HumanError> {
+pub(crate) fn validate_period(from: i64, to: i64) -> Result<(), HumanError> {
     if from >= to
         || from < MIN_TIME
         || to > MAX_TIME
@@ -129,7 +129,7 @@ impl HumanKind {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct HumanError(&'static str);
+pub struct HumanError(pub(crate) &'static str);
 impl fmt::Display for HumanError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.0)
@@ -616,6 +616,22 @@ impl HumanReader {
 }
 
 impl crate::store::Store {
+    pub fn human_summary(
+        &self,
+        source: &str,
+        from: i64,
+        to: i64,
+        timezone: &str,
+        visible: &[HumanKind],
+    ) -> Result<crate::human_summary::HumanSummaryResponse, HumanError> {
+        let mut summary = crate::human_summary::Accumulator::new(from, to, timezone, visible)?;
+        let diagnostics =
+            self.visit_human_source(source, from, to, |_id, _hash, record| summary.add(record))?;
+        Ok(crate::human_summary::HumanSummaryResponse {
+            days: summary.finish(),
+            diagnostics,
+        })
+    }
     /// Display grouping is intentionally restricted to one selected source.
     pub fn human_activity_display(
         &self,

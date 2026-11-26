@@ -7,8 +7,22 @@ import type {
   HumanActivityResponse,
   HumanSyncStatus,
   HumanClearResult,
+  HumanSummaryResponse,
+  HumanActivityKind,
 } from "./types";
 export const api = {
+  humanSummary: (
+    from: number,
+    to: number,
+    timezone: string,
+    visible: HumanActivityKind[],
+  ) =>
+    invoke<HumanSummaryResponse>("human_summary", {
+      from,
+      to,
+      timezone,
+      visible,
+    }),
   humanActivity: (
     from: number,
     to: number,

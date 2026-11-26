@@ -308,19 +308,50 @@ impl HumanRuntime {
         let path = control.preferences.root.join("storage.db");
         drop(control);
         let store = cache(&self.shared.cache, true)?;
-        let current = match crate::rei_human::source_identity(&path) {
-            Ok(id) => Some(id),
-            Err(_) => {
-                let logical =
-                    crate::rei_human::logical_source_path(&path).map_err(|e| e.to_string())?;
-                store.conn.query_row("SELECT CASE WHEN typeof(source_id)='blob' THEN lower(hex(source_id)) ELSE source_id END FROM human_activity_sources WHERE source_path=? ORDER BY last_sync DESC,source_id DESC LIMIT 1", [&logical], |r| r.get::<_,String>(0)).optional().map_err(|_| "cache_read_failed")?
-            }
-        };
+        let current = selected_source(&store, &path)?;
         match current {
             Some(source) => store.human_activity_display(&source, from, to, timezone, grouped),
             None => store.human_activity(&[], from, to),
         }
         .map_err(|e| e.to_string())
+    }
+    pub fn summary(
+        &self,
+        from: i64,
+        to: i64,
+        timezone: &str,
+        visible: &[crate::rei_human::HumanKind],
+    ) -> Result<crate::human_summary::HumanSummaryResponse, String> {
+        let _gate = lock(&self.shared.gate);
+        let control = lock(&self.shared.control);
+        if !control.preferences.enabled {
+            return Err("human_activity_disabled".into());
+        }
+        crate::rei_human::validate_period(from, to).map_err(|e| e.to_string())?;
+        timezone
+            .parse::<chrono_tz::Tz>()
+            .map_err(|_| "invalid_timezone")?;
+        let path = control.preferences.root.join("storage.db");
+        drop(control);
+        let store = cache(&self.shared.cache, true)?;
+        match selected_source(&store, &path)? {
+            Some(source) => store
+                .human_summary(&source, from, to, timezone, visible)
+                .map_err(|e| e.to_string()),
+            None => Ok(crate::human_summary::HumanSummaryResponse {
+                days: vec![],
+                diagnostics: vec![],
+            }),
+        }
+    }
+}
+fn selected_source(store: &Store, path: &Path) -> Result<Option<String>, String> {
+    match crate::rei_human::source_identity(path) {
+        Ok(id) => Ok(Some(id)),
+        Err(_) => {
+            let logical = crate::rei_human::logical_source_path(path).map_err(|e| e.to_string())?;
+            store.conn.query_row("SELECT CASE WHEN typeof(source_id)='blob' THEN lower(hex(source_id)) ELSE source_id END FROM human_activity_sources WHERE source_path=? ORDER BY last_sync DESC,source_id DESC LIMIT 1", [&logical], |r| r.get::<_,String>(0)).optional().map_err(|_| "cache_read_failed".into())
+        }
     }
 }
 impl Drop for HumanRuntime {

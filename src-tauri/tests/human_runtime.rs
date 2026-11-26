@@ -32,6 +32,10 @@ fn disabled_runtime_never_opens_missing_source_and_refuses_periods() {
         runtime.period(0, 1000).unwrap_err(),
         "human_activity_disabled"
     );
+    assert_eq!(
+        runtime.summary(0, 1000, "UTC", &[]).unwrap_err(),
+        "human_activity_disabled"
+    );
     assert!(!runtime.status().busy);
     assert!(runtime.status().generation > 0);
     assert!(!staging.exists());
@@ -695,6 +699,18 @@ fn display_grouping_never_joins_the_previous_source_after_switching_roots() {
         assert_eq!(
             (response.records[0].start, response.records[0].end),
             expected
+        );
+        let daily = runtime
+            .summary(
+                0,
+                3000,
+                "UTC",
+                &[codecal_lib::rei_human::HumanKind::Entertainment],
+            )
+            .unwrap();
+        assert_eq!(
+            daily.days.iter().map(|d| d.total_ms).sum::<i64>(),
+            if expected.0 == 1000 { 2000 } else { 0 }
         );
     }
 }
