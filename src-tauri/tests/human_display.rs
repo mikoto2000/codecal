@@ -100,6 +100,22 @@ fn dense_contiguous_observations_are_grouped_before_limiting_output() {
         (grouped.records[0].start, grouped.records[0].end),
         (1000, 52000)
     );
+    let summary = store
+        .human_summary(&id, 0, 42 * 86_400_000, "UTC", &[HumanKind::Entertainment])
+        .unwrap();
+    assert_eq!(summary.days.len(), 1);
+    assert_eq!(summary.days[0].total_ms, 51_000);
+    assert_eq!(summary.days[0].kinds[&HumanKind::Entertainment], 51_000);
+    let wire = serde_json::to_string(&summary).unwrap();
+    assert!(wire.len() < 2048);
+    assert!(!wire.contains("PRIVATE_DISPLAY_MARKER"));
+    assert!(!wire.contains("synthetic-"));
+    assert!(!wire.contains("source_id"));
+    let hidden = store
+        .human_summary(&id, 0, 42 * 86_400_000, "UTC", &[])
+        .unwrap();
+    assert_eq!(hidden.days[0].total_ms, 0);
+    assert_eq!(hidden.days[0].kinds[&HumanKind::Entertainment], 51_000);
 }
 
 fn ms(value: &str) -> i64 {

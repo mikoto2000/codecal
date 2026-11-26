@@ -616,6 +616,22 @@ impl HumanReader {
 }
 
 impl crate::store::Store {
+    pub fn human_summary(
+        &self,
+        source: &str,
+        from: i64,
+        to: i64,
+        timezone: &str,
+        visible: &[HumanKind],
+    ) -> Result<crate::human_summary::HumanSummaryResponse, HumanError> {
+        let mut summary = crate::human_summary::Accumulator::new(from, to, timezone, visible)?;
+        let diagnostics =
+            self.visit_human_source(source, from, to, |_id, _hash, record| summary.add(record))?;
+        Ok(crate::human_summary::HumanSummaryResponse {
+            days: summary.finish(),
+            diagnostics,
+        })
+    }
     /// Display grouping is intentionally restricted to one selected source.
     pub fn human_activity_display(
         &self,

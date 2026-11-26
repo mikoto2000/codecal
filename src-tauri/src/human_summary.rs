@@ -1,5 +1,5 @@
 //! Bounded daily summaries of minimized observations.
-use crate::rei_human::{HumanActivity, HumanError, HumanKind};
+use crate::rei_human::{HumanActivity, HumanDiagnostic, HumanError, HumanKind};
 use chrono::{DateTime, Duration, TimeZone};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -10,13 +10,18 @@ const KINDS: [HumanKind; 3] = [
     HumanKind::Unknown,
 ];
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct HumanDaySummary {
     pub date: String,
     pub day_length_ms: i64,
     pub total_ms: i64,
     pub kinds: BTreeMap<HumanKind, i64>,
     pub observed: BTreeSet<HumanKind>,
+}
+#[derive(Debug, Serialize)]
+pub struct HumanSummaryResponse {
+    pub days: Vec<HumanDaySummary>,
+    pub diagnostics: Vec<HumanDiagnostic>,
 }
 #[derive(Default)]
 struct Union {
