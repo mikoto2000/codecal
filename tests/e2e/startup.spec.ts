@@ -6,7 +6,7 @@ import {
   type Page,
 } from "@playwright/test";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 const root = path.resolve(".local", `startup-${Date.now()}`);
@@ -53,6 +53,20 @@ test.beforeEach(async () => {
     .getByRole("button", { name: "設定", exact: true })
     .waitFor({ timeout: 60000 });
   console.info("Synthetic startup ready_ms", Date.now() - began);
+  const first = await page.evaluate(() => window.__CODECAL_STARTUP__?.timings);
+  expect(first!.native_splash_ms).toBeGreaterThan(0);
+  expect(first!.native_splash_ms).toBeLessThan(first!.native_shell_ms);
+  console.info(
+    "Synthetic cold startup phases",
+    await page.evaluate(() => ({
+      timings: window.__CODECAL_STARTUP__?.timings,
+      resources: performance.getEntriesByType("resource").map((e) => ({
+        asset: e.name.split("/").pop(),
+        start_ms: e.startTime,
+        duration_ms: e.duration,
+      })),
+    })),
+  );
 });
 test.afterEach(async () => {
   await browser?.close().catch(() => {});
@@ -91,6 +105,7 @@ test("startup shell paints without JavaScript and hands off to the existing Reac
       .poll(() => spinner.evaluate((el) => getComputedStyle(el).transform))
       .not.toBe(a);
     await expect(page.locator("#root")).toBeEmpty();
+    await expect(page.locator('link[rel="stylesheet"]')).toHaveCount(0);
     await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
     await expect(spinner).toHaveCSS("animation-name", "none");
     await expect(shell).toHaveCSS("background-color", "rgb(24, 31, 44)");
@@ -98,7 +113,22 @@ test("startup shell paints without JavaScript and hands off to the existing Reac
   } finally {
     await cdp.send("Emulation.setScriptExecutionDisabled", { value: false });
   }
-  await page.reload();
+  // WebView2 asset requests bypass HTTP routing. Run only the packaged
+  // bootstrap after disabling page scripts, then simulate the entry-module error.
+  const evaluated = await cdp.send("Runtime.evaluate", {
+    expression: readFileSync(path.resolve("dist/startup.js"), "utf8"),
+  });
+  expect(evaluated.exceptionDetails).toBeUndefined();
+  await page
+    .locator('script[type="module"]')
+    .first()
+    .evaluate((el) => el.dispatchEvent(new Event("error", { bubbles: true })));
+  await expect(page.getByRole("alert")).toHaveText(
+    "画面を読み込めませんでした。再読み込みしてください。",
+  );
+  await expect(page.locator(".boot-spinner")).toBeHidden();
+  await page.getByRole("button", { name: "再読み込み", exact: true }).focus();
+  await page.keyboard.press("Enter");
   await page.getByRole("button", { name: "設定", exact: true }).waitFor();
   await expect(page.locator("#boot-shell")).toHaveCount(0);
   const timings = await page.evaluate(
@@ -107,6 +137,8 @@ test("startup shell paints without JavaScript and hands off to the existing Reac
   console.info("Synthetic startup phases", timings);
   expect(timings).toBeDefined();
   expect(timings!.shell_ms).toBeLessThanOrEqual(timings!.module_ms);
+  expect(timings!.module_ms).toBeLessThanOrEqual(timings!.styles_ms);
+  expect(timings!.styles_ms).toBeLessThanOrEqual(timings!.react_ms);
   expect(timings!.react_ms).toBeLessThanOrEqual(timings!.database_start_ms);
   expect(timings!.database_ready_ms).toBeGreaterThanOrEqual(
     timings!.database_start_ms,

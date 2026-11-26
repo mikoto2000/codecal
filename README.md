@@ -140,3 +140,5 @@ CodeCal は起動時にスピナーと「CodeCal がデータベースを確認�
 不具合報告やPRの進め方は [CONTRIBUTING.md](CONTRIBUTING.md) にまとめています。
 
 [MITライセンス](LICENSE)で公開しています。
+
+WindowsではWebViewの準備前からネイティブスピナーを表示します。初期HTML・Reactの進行表示へ引き継ぎ、続いてデータベース準備状況を表示します。画面の読込が遅い場合や失敗した場合は再読み込みを操作できます。[起動表示の切り分けと計測](docs/startup-spinner.md)を参照してください。

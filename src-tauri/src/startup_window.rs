@@ -164,6 +164,10 @@ impl NativeStartup {
             unsafe {
                 PostMessageW(hwnd, DISMISS, 0, 0);
             }
+        } else {
+            // Creation can fail or finish late; do not retain the AppHandle
+            // cycle when there is no WM_DESTROY callback to release it.
+            self.0.app.lock().unwrap_or_else(|e| e.into_inner()).take();
         }
     }
 }

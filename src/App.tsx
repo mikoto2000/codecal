@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -179,7 +180,7 @@ function ProjectEditor({
   );
 }
 export default function App({ initialDate }: { initialDate?: string }) {
-  useEffect(showReactStartup, []);
+  useLayoutEffect(showReactStartup, []);
   const [config, setConfig] = useState<Config | null>(null),
     [draft, setDraft] = useState<Config | null>(null),
     [data, setData] = useState(empty),
