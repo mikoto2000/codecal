@@ -12,6 +12,16 @@ use std::{
 
 const MIN_TIME: i64 = -62_135_596_800_000;
 const MAX_TIME: i64 = 253_402_300_799_999;
+fn validate_period(from: i64, to: i64) -> Result<(), HumanError> {
+    if from >= to
+        || from < MIN_TIME
+        || to > MAX_TIME
+        || to.checked_sub(from).is_none_or(|v| v > 62 * 86_400_000)
+    {
+        return Err(HumanError("invalid_period"));
+    }
+    Ok(())
+}
 
 pub(crate) fn logical_source_path(path: &Path) -> Result<String, HumanError> {
     let path = std::path::absolute(path).map_err(|_| HumanError("source_unavailable"))?;
@@ -621,10 +631,10 @@ impl crate::store::Store {
         let tz: chrono_tz::Tz = timezone
             .parse()
             .map_err(|_| HumanError("invalid_timezone"))?;
-        let mut response = self.human_activity(&[source.to_owned()], from, to)?;
+        validate_period(from, to)?;
         let mut out: Vec<HumanActivity> = vec![];
         let mut last_date = None;
-        for record in response.records {
+        let diagnostics = self.visit_human_source(source, from, to, |_id, _hash, record| {
             let mut start = record.start.max(from);
             let end = record.end.min(to);
             loop {
@@ -659,9 +669,12 @@ impl crate::store::Store {
                 }
                 start = stop;
             }
-        }
-        response.records = out;
-        Ok(response)
+            Ok(())
+        })?;
+        Ok(HumanActivityResponse {
+            records: out,
+            diagnostics,
+        })
     }
     fn prepare_human_changes(
         &self,
@@ -839,67 +852,67 @@ impl crate::store::Store {
         from: i64,
         to: i64,
     ) -> Result<HumanActivityResponse, HumanError> {
-        if from >= to
-            || from < MIN_TIME
-            || to > MAX_TIME
-            || to.checked_sub(from).is_none_or(|v| v > 62 * 86_400_000)
-        {
-            return Err(HumanError("invalid_period"));
-        }
-        let read = || -> Result<HumanActivityResponse, HumanError> {
-            let mut records = vec![];
-            let mut seen = HashSet::new();
-            let mut counts = BTreeMap::new();
-            for source in sources {
-                let key = source_key(&self.conn, source)?;
-                let raw: Option<String> = self
-                    .conn
-                    .query_row(
-                        "SELECT diagnostics FROM human_activity_sources WHERE source_id=?",
-                        [&key],
-                        |r| r.get(0),
-                    )
-                    .optional()
-                    .map_err(cache_read_error)?;
-                let Some(raw) = raw else {
-                    continue;
-                };
-                let ds: Vec<HumanDiagnostic> =
-                    serde_json::from_str(&raw).map_err(|_| HumanError("cache_read_failed"))?;
-                for d in ds {
-                    *counts.entry(d.code).or_insert(0) += d.count;
-                }
-                // Representatives do not overlap inside a source. Include its
-                // one preceding representative, then seek only this time range.
-                let mut query = self.conn.prepare("SELECT native_id,CASE WHEN typeof(content_hash)='blob' THEN hex(content_hash) ELSE upper(content_hash) END,captured_at,effective_end,kind FROM human_activity_records WHERE source_id=?1 AND captured_at>=coalesce((SELECT max(p.captured_at) FROM human_activity_records p INDEXED BY human_activity_start WHERE p.source_id=?1 AND p.captured_at<?3 AND p.effective_end IS NOT NULL),?3) AND captured_at<?2 AND (effective_end>?3 OR (effective_end=captured_at AND captured_at>=?4)) ORDER BY captured_at,native_id").map_err(cache_read_error)?;
-                let mut rows = query
-                    .query(params![&key, to, from, from])
-                    .map_err(cache_read_error)?;
-                while let Some(row) = rows.next().map_err(cache_read_error)? {
-                    let id: String = row.get(0).map_err(cache_read_error)?;
-                    let hash: String = row.get(1).map_err(cache_read_error)?;
-                    let start: i64 = row.get(2).map_err(cache_read_error)?;
-                    let end: i64 = row.get(3).map_err(cache_read_error)?;
-                    let label: String = row.get(4).map_err(cache_read_error)?;
-                    if seen.insert((id, hash, start, end, label.clone())) {
-                        if records.len() == 50_000 {
-                            return Err(HumanError("period_too_dense"));
-                        }
-                        records.push(HumanActivity {
-                            start,
-                            end,
-                            kind: HumanKind::from_sql(&label),
-                        });
+        validate_period(from, to)?;
+        let mut records = vec![];
+        let mut seen = HashSet::new();
+        let mut counts = BTreeMap::new();
+        for source in sources {
+            let ds = self.visit_human_source(source, from, to, |id, hash, record| {
+                if seen.insert((id, hash, record.start, record.end, record.kind)) {
+                    if records.len() == 50_000 {
+                        return Err(HumanError("period_too_dense"));
                     }
+                    records.push(record);
                 }
+                Ok(())
+            })?;
+            for d in ds {
+                *counts.entry(d.code).or_insert(0) += d.count;
             }
-            records.sort_by_key(|r| (r.start, r.end, r.kind));
-            Ok(HumanActivityResponse {
-                records,
-                diagnostics: diagnostics(counts),
-            })
+        }
+        records.sort_by_key(|r| (r.start, r.end, r.kind));
+        Ok(HumanActivityResponse {
+            records,
+            diagnostics: diagnostics(counts),
+        })
+    }
+    fn visit_human_source(
+        &self,
+        source: &str,
+        from: i64,
+        to: i64,
+        mut visit: impl FnMut(String, String, HumanActivity) -> Result<(), HumanError>,
+    ) -> Result<Vec<HumanDiagnostic>, HumanError> {
+        let key = source_key(&self.conn, source)?;
+        let raw: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT diagnostics FROM human_activity_sources WHERE source_id=?",
+                [&key],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(cache_read_error)?;
+        let Some(raw) = raw else {
+            return Ok(vec![]);
         };
-        read()
+        let diagnostics =
+            serde_json::from_str(&raw).map_err(|_| HumanError("cache_read_failed"))?;
+        // Representatives are disjoint per source. Seek the preceding one and
+        // this period, then stream minimized cache rows to a bounded consumer.
+        let mut query=self.conn.prepare("SELECT native_id,CASE WHEN typeof(content_hash)='blob' THEN hex(content_hash) ELSE upper(content_hash) END,captured_at,effective_end,kind FROM human_activity_records WHERE source_id=?1 AND captured_at>=coalesce((SELECT max(p.captured_at) FROM human_activity_records p INDEXED BY human_activity_start WHERE p.source_id=?1 AND p.captured_at<?3 AND p.effective_end IS NOT NULL),?3) AND captured_at<?2 AND (effective_end>?3 OR (effective_end=captured_at AND captured_at>=?4)) ORDER BY captured_at,native_id").map_err(cache_read_error)?;
+        let mut rows = query
+            .query(params![&key, to, from, from])
+            .map_err(cache_read_error)?;
+        while let Some(row) = rows.next().map_err(cache_read_error)? {
+            let id = row.get(0).map_err(cache_read_error)?;
+            let hash = row.get(1).map_err(cache_read_error)?;
+            let start = row.get(2).map_err(cache_read_error)?;
+            let end = row.get(3).map_err(cache_read_error)?;
+            let kind = HumanKind::from_sql(&row.get::<_, String>(4).map_err(cache_read_error)?);
+            visit(id, hash, HumanActivity { start, end, kind })?;
+        }
+        Ok(diagnostics)
     }
 }
 
