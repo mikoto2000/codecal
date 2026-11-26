@@ -73,7 +73,12 @@ select {
   margin: 0 0 8px;
 }
 .human-sync-times {
+  display: block;
   margin: 8px 0;
+}
+.human-sync-times time {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .human-sync-times dt {
   color: var(--muted);
@@ -369,6 +374,11 @@ h3 {
 }
 .human-filter-list .project-filter {
   padding: 8px 0;
+}
+.human-filter-list .project-name {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
 }
 .human-filter-list .hint {
   font-size: 10px;

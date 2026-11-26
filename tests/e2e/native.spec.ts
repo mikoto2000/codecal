@@ -197,8 +197,8 @@ test("human settings: legacy memory database, isolated IPC, WAL updates, OFF res
     try {
       await ipc("sync_logs");
       await page.getByLabel("表示日").fill("2026-11-20");
-      await expect(page.locator(".human-block")).toHaveCount(4);
-      await expect(page.locator(".human-time-lane")).toHaveCount(21);
+      await expect(page.locator(".human-block")).toHaveCount(3);
+      await expect(page.locator(".human-time-lane")).toHaveCount(14);
       const ai = page.getByRole("button", { name: /^AI overlap 10:00/ });
       const entertainment = page.getByRole("button", { name: /^人間 娯楽 / });
       await expect(ai).toBeVisible();
@@ -255,10 +255,12 @@ test("human settings: legacy memory database, isolated IPC, WAL updates, OFF res
       await page.keyboard.press("Escape");
       await page.getByLabel("ブロックの表示単位").selectOption("group");
       await expect(entertainment).toHaveCount(1);
-      await page.getByRole("button", { name: /^人間 不明 .*点の観測/ }).click();
+      await page
+        .getByRole("button", { name: /^人間 非娯楽（不明含む） .*点の観測/ })
+        .click();
       await expect(
         page.getByRole("dialog", { name: "人間のアクティビティ（推定）" }),
-      ).toContainText("0h 0m 0.000s");
+      ).toContainText("0h 0m 1.000s");
       await page.keyboard.press("Escape");
       await page
         .getByRole("button", { name: "プロジェクトをすべてOFF", exact: true })
@@ -285,7 +287,7 @@ test("human settings: legacy memory database, isolated IPC, WAL updates, OFF res
       expect(list!.y + list!.height).toBeLessThanOrEqual(640);
       expect(settings!.y + settings!.height).toBeLessThanOrEqual(640);
       const unknown = page.getByRole("checkbox", {
-        name: "人間の不明を表示",
+        name: "人間の非娯楽（不明含む）を表示",
         exact: true,
       });
       await unknown.focus();
@@ -295,7 +297,7 @@ test("human settings: legacy memory database, isolated IPC, WAL updates, OFF res
         .getByRole("button", { name: "人間の種別をすべてON", exact: true })
         .click();
       await page.getByRole("button", { name: "日", exact: true }).click();
-      await expect(page.locator(".human-time-lane")).toHaveCount(3);
+      await expect(page.locator(".human-time-lane")).toHaveCount(2);
       const dayCell = page.getByRole("button", { name: /^人間 娯楽 / });
       await dayCell.scrollIntoViewIfNeeded();
       await dayCell.focus();
@@ -304,7 +306,7 @@ test("human settings: legacy memory database, isolated IPC, WAL updates, OFF res
       await page.keyboard.press("Escape");
       await page.screenshot({ path: "test-results/human-bands-day.png" });
       await page.getByRole("button", { name: "週", exact: true }).click();
-      await expect(page.locator(".human-time-lane")).toHaveCount(21);
+      await expect(page.locator(".human-time-lane")).toHaveCount(14);
       for (const theme of ["light", "dark"]) {
         await page.getByRole("button", { name: "設定", exact: true }).click();
         await page.getByLabel("テーマ", { exact: true }).selectOption(theme);
@@ -660,17 +662,21 @@ test("human month: dense observations, independent bars and filtered day records
       cell.getByRole("img", { name: "娯楽 推定 0h 4m", exact: true }),
     ).toBeVisible();
     await expect(
-      cell.getByRole("img", { name: "非娯楽 推定 0h 1m", exact: true }),
+      cell.getByRole("img", {
+        name: "非娯楽（不明含む） 推定 0h 1m",
+        exact: true,
+      }),
     ).toBeVisible();
-    await expect(
-      cell.getByRole("img", { name: "不明 推定 0h 0m 点の観測", exact: true }),
-    ).toBeVisible();
+    await expect(cell.getByRole("img")).toHaveCount(2);
     const longCell = page.getByRole("button", { name: /^2026-11-21 / });
     await expect(
       longCell.getByRole("img", { name: "娯楽 推定 4h 0m", exact: true }),
     ).toBeVisible();
     await expect(
-      longCell.getByRole("img", { name: "非娯楽 推定 2h 0m", exact: true }),
+      longCell.getByRole("img", {
+        name: "非娯楽（不明含む） 推定 2h 0m",
+        exact: true,
+      }),
     ).toBeVisible();
     await expect(page.locator(".empty-state")).toHaveCount(0);
     await cell.click();
@@ -697,9 +703,14 @@ test("human month: dense observations, independent bars and filtered day records
     ).toHaveCount(2);
     await dialog.getByRole("button", { name: "閉じる", exact: true }).click();
     await page
-      .getByRole("checkbox", { name: "人間の非娯楽を表示", exact: true })
+      .getByRole("checkbox", {
+        name: "人間の非娯楽（不明含む）を表示",
+        exact: true,
+      })
       .uncheck();
-    await expect(cell.getByRole("img", { name: /^非娯楽 / })).toHaveCount(0);
+    await expect(
+      cell.getByRole("img", { name: /^非娯楽（不明含む） / }),
+    ).toHaveCount(0);
     await cell.click();
     dialog = page.getByRole("dialog", {
       name: "2026-11-20 のアクティビティ",
@@ -713,10 +724,17 @@ test("human month: dense observations, independent bars and filtered day records
       human.getByRole("button", { name: /^人間 娯楽 / }),
     ).toHaveCount(2);
     await expect(
-      human.getByRole("button", { name: /^人間 非娯楽 / }),
+      human.getByRole("button", { name: /^人間 非娯楽（不明含む） / }),
     ).toHaveCount(0);
     await expect(human.getByTestId("human-total")).toHaveText("0h 4m");
-    await human.getByRole("button", { name: /^人間 不明 / }).click();
+    await dialog.getByRole("button", { name: "閉じる", exact: true }).click();
+    await page
+      .getByRole("button", { name: "人間の種別をすべてON", exact: true })
+      .click();
+    await cell.click();
+    await human
+      .getByRole("button", { name: /^人間 非娯楽（不明含む） .*点の観測/ })
+      .click();
     const detail = page.getByRole("dialog", {
       name: "人間のアクティビティ（推定）",
       exact: true,
@@ -725,9 +743,6 @@ test("human month: dense observations, independent bars and filtered day records
     for (const forbidden of [marker, humanRoot, "dense-", "UNCERTAIN"])
       await expect(detail).not.toContainText(forbidden);
     await page.keyboard.press("Escape");
-    await page
-      .getByRole("button", { name: "人間の種別をすべてON", exact: true })
-      .click();
     const viewport = await page.evaluate(() => ({
       width: innerWidth,
       height: innerHeight,
@@ -1030,8 +1045,8 @@ test("human performance: native synchronization keeps navigation responsive with
       page.getByRole("button", { name: "日", exact: true }),
     ).toHaveAttribute("aria-pressed", "true");
     await page.getByLabel("表示日").fill("2026-11-01");
-    await expect(page.locator(".human-time-lane")).toHaveCount(3);
-    expect(await page.locator(".human-block").count()).toBeLessThanOrEqual(864);
+    await expect(page.locator(".human-time-lane")).toHaveCount(2);
+    expect(await page.locator(".human-block").count()).toBeLessThanOrEqual(576);
     await page.locator(".human-block").first().click();
     await expect(
       page.getByRole("dialog", { name: "人間のアクティビティ（推定）" }),
@@ -1987,10 +2002,10 @@ test("human bands: dense day/week lanes, duration coverage and keyboard details"
       exact: true,
     });
     if (await allHumanOn.count()) await allHumanOn.click();
-    await expect(page.locator(".human-time-cell")).toHaveCount(301, {
+    await expect(page.locator(".human-time-cell")).toHaveCount(201, {
       timeout: 40000,
     });
-    await expect(page.locator(".human-time-lane")).toHaveCount(3);
+    await expect(page.locator(".human-time-lane")).toHaveCount(2);
     await expect(
       page.getByRole("region", { name: "表示期間の集計" }),
     ).toHaveCount(0);
@@ -1998,6 +2013,18 @@ test("human bands: dense day/week lanes, duration coverage and keyboard details"
       .getByRole("region", { name: "人間のアクティビティ", exact: true })
       .getByRole("region", { name: "人間のアクティビティ同期", exact: true });
     await expect(sidebarSync).toContainText("1時間ごと");
+    await expect(sidebarSync.locator("time")).toHaveCount(2);
+    const syncTimes = await sidebarSync
+      .locator("time")
+      .evaluateAll((els) =>
+        els.map((el) => Date.parse(el.getAttribute("datetime")!)),
+      );
+    expect(syncTimes[1] - syncTimes[0]).toBeGreaterThan(3595000);
+    expect(syncTimes[1] - syncTimes[0]).toBeLessThan(3605000);
+    for (const time of await sidebarSync.locator("time").all()) {
+      expect((await time.boundingBox())!.height).toBeLessThanOrEqual(20);
+    }
+
     await expect(page.locator(".workspace .human-sync")).toHaveCount(0);
     const normalViewport =
       page.viewportSize() ??
@@ -2039,8 +2066,8 @@ test("human bands: dense day/week lanes, duration coverage and keyboard details"
       .evaluateAll((els) => els.map((el) => el.getAttribute("aria-label")));
     await page.screenshot({ path: "test-results/human-bands-dense-day.png" });
     await page.getByRole("button", { name: "週", exact: true }).click();
-    await expect(page.locator(".human-time-lane")).toHaveCount(21);
-    await expect(page.locator(".human-time-cell")).toHaveCount(301);
+    await expect(page.locator(".human-time-lane")).toHaveCount(14);
+    await expect(page.locator(".human-time-cell")).toHaveCount(201);
     expect(
       await page
         .locator(".human-time-cell")
@@ -2048,13 +2075,13 @@ test("human bands: dense day/week lanes, duration coverage and keyboard details"
     ).toEqual(labels);
     await page.screenshot({ path: "test-results/human-bands-dense-week.png" });
     const unknown = page.getByRole("checkbox", {
-      name: "人間の不明を表示",
+      name: "人間の非娯楽（不明含む）を表示",
       exact: true,
     });
     await unknown.uncheck();
-    await expect(page.locator(".human-time-lane")).toHaveCount(21);
+    await expect(page.locator(".human-time-lane")).toHaveCount(14);
     await expect(
-      page.locator('.human-time-lane[data-kind="unknown"] button'),
+      page.locator('.human-time-lane[data-kind="other"] button'),
     ).toHaveCount(0);
     const missingRoot = path.join(root, "missing-human-source");
     mkdirSync(missingRoot, { recursive: true });
