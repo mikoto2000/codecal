@@ -68,9 +68,9 @@ pub(crate) fn validate_staging_directory(path: &Path) -> Result<(), HumanError> 
 
 fn validate_source_schema(conn: &Connection) -> Result<(), HumanError> {
     let ordinary: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_list WHERE schema='main' AND name='activity_records' AND type='table' AND wr=0)",[],|r|r.get(0)).map_err(|_|HumanError("unsupported_source"))?;
-    let columns: i64 = conn.query_row("SELECT count(*) FROM pragma_table_xinfo('activity_records') WHERE hidden=0 AND ((name='id' AND upper(type)='TEXT' AND pk=1) OR (name='captured_at' AND upper(type)='INTEGER') OR (name='payload' AND upper(type)='TEXT'))",[],|r|r.get(0)).map_err(|_|HumanError("unsupported_source"))?;
+    let (columns, keys): (i64,i64) = conn.query_row("SELECT count(CASE WHEN (name='id' AND upper(type)='TEXT' AND pk=1) OR (name='captured_at' AND upper(type)='INTEGER') OR (name='payload' AND upper(type)='TEXT') THEN 1 END),count(CASE WHEN pk>0 THEN 1 END) FROM pragma_table_xinfo('activity_records') WHERE hidden=0",[],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|_|HumanError("unsupported_source"))?;
     let shadows: i64 = conn.query_row("SELECT count(*) FROM pragma_table_xinfo('activity_records') WHERE lower(name) IN ('rowid','_rowid_','oid')",[],|r|r.get(0)).map_err(|_|HumanError("unsupported_source"))?;
-    if !ordinary || columns != 3 || shadows != 0 {
+    if !ordinary || columns != 3 || keys != 1 || shadows != 0 {
         return Err(HumanError("unsupported_source"));
     }
     Ok(())
@@ -362,8 +362,9 @@ impl<'a> MinimizedAttachment<'a> {
             ._file
             .path()
             .to_str()
-            .ok_or(HumanError("staging_failed"))?
-            .replace('\\', "/");
+            .ok_or(HumanError("staging_failed"))?;
+        #[cfg(windows)]
+        let path = path.replace('\\', "/");
         let mut uri = String::from("file:");
         for byte in path.bytes() {
             if byte.is_ascii_alphanumeric() || b"/:-._~".contains(&byte) {
@@ -546,7 +547,7 @@ impl HumanReader {
             .map_err(|_| HumanError("staging_failed"))?;
         loop {
             check()?;
-            let page = self.read_page_checked(cursor, &check)?;
+            let page = self.read_page_checked(cursor, check)?;
             if page.cursor == cursor {
                 break;
             }
@@ -1150,7 +1151,15 @@ mod privacy_tests {
         let path = tmp.path().join("source.db");
         let source = Connection::open(&path).unwrap();
         source.execute_batch("CREATE TABLE activity_records(id TEXT PRIMARY KEY,captured_at INTEGER,payload TEXT); INSERT INTO activity_records VALUES('fixture',1000,'{\"durationEstimate\":1}');").unwrap();
-        let stage = HumanReader::open(&path).unwrap().stage(|| false).unwrap();
+        #[cfg(windows)]
+        let staging = tmp.path().join("staging #100% 日本");
+        #[cfg(not(windows))]
+        let staging = tmp.path().join("staging #100% 日本\\literal");
+        std::fs::create_dir(&staging).unwrap();
+        let stage = HumanReader::open(&path)
+            .unwrap()
+            .stage_in(&staging, || false)
+            .unwrap();
         let cache = Connection::open_in_memory().unwrap();
         {
             let _attachment = MinimizedAttachment::new(&cache, &stage).unwrap();
