@@ -11,6 +11,7 @@ it.each([23, 24, 25])(
         day={{
           date: "2026-11-01",
           day_length_ms: hours * 3600000,
+          other_ms: 3600000,
           total_ms: 3600000,
           kinds: {
             entertainment: 3600000,
@@ -21,7 +22,7 @@ it.each([23, 24, 25])(
         }}
       />,
     );
-    for (const label of ["娯楽 推定 1h 0m", "非娯楽 推定 1h 0m"]) {
+    for (const label of ["娯楽 推定 1h 0m", "非娯楽（不明含む） 推定 1h 0m"]) {
       const bar = screen.getByRole("img", { name: label });
       expect(
         parseFloat((bar.firstElementChild as HTMLElement).style.width),

@@ -17,6 +17,7 @@ const status: HumanSyncStatus = {
   revision: 1,
   error: null,
   last_success: 1000,
+  next_auto_sync: null,
 };
 const empty: HumanActivityResponse = { records: [], diagnostics: [] };
 const listeners: ((status: HumanSyncStatus) => void)[] = [];

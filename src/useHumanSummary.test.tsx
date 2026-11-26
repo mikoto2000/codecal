@@ -20,6 +20,7 @@ beforeEach(() => {
     busy: false,
     error: null,
     last_success: 1000,
+    next_auto_sync: null,
   });
   vi.mocked(api.humanEvents).mockResolvedValue(() => {});
   vi.mocked(api.humanSummary).mockResolvedValue({ days: [], diagnostics: [] });
@@ -59,6 +60,7 @@ it("keys daily summaries by kind filter and discards older filter or disabled re
         {
           date: "1970-01-01",
           day_length_ms: 86_400_000,
+          other_ms: 0,
           total_ms: 1000,
           kinds: { entertainment: 1000, non_entertainment: 0, unknown: 0 },
           observed: ["entertainment"],
@@ -78,6 +80,7 @@ it("retains prefilter hours during a filter request but removes them on source c
       {
         date: "1970-01-01",
         day_length_ms: 86_400_000,
+        other_ms: 0,
         total_ms: 1000,
         kinds: { entertainment: 1000, non_entertainment: 0, unknown: 0 },
         observed: ["entertainment"],
@@ -117,6 +120,7 @@ it("discards successful prefilter days after a failed current-source fetch and d
       {
         date: "1970-01-01",
         day_length_ms: 86_400_000,
+        other_ms: 0,
         total_ms: 1000,
         kinds: { entertainment: 1000, non_entertainment: 0, unknown: 0 },
         observed: ["entertainment"],
@@ -138,6 +142,7 @@ it("discards successful prefilter days after a failed current-source fetch and d
       busy: false,
       error: "source_unavailable",
       last_success: 1000,
+      next_auto_sync: null,
     }),
   );
   await waitFor(() => expect(result.current.error).toBe("source_unavailable"));

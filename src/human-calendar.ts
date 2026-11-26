@@ -93,11 +93,13 @@ export function summarizeHumanDays(
     unknown: 0,
   };
   let total_ms = 0;
+  let other_ms = 0;
   for (const date of new Set(dates)) {
     const records = index.get(date)?.segments ?? [];
+    other_ms += unionMs(records.filter((r) => r.kind !== "entertainment"));
     total_ms += unionMs(records.filter((r) => visible.includes(r.kind)));
     for (const kind of visible)
       kinds[kind] += unionMs(records.filter((r) => r.kind === kind));
   }
-  return { total_ms, kinds };
+  return { total_ms, kinds, other_ms };
 }

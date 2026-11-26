@@ -8,6 +8,7 @@ const idle: HumanSyncStatus = {
   revision: 0,
   error: null,
   last_success: null,
+  next_auto_sync: null,
 };
 const allowedErrors = new Set([
   "human_activity_disabled",
