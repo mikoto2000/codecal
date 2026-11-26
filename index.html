@@ -4,9 +4,98 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CodeCal</title>
+    <style>
+      #boot-shell {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+        padding: 32px;
+        box-sizing: border-box;
+        background: #fff;
+        color: #26354a;
+        font:
+          14px "Segoe UI",
+          "Yu Gothic UI",
+          sans-serif;
+      }
+      #boot-shell h1 {
+        margin: 0;
+        font-size: 28px;
+      }
+      #boot-shell p {
+        margin: 0;
+      }
+      .boot-progress {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .boot-spinner {
+        width: 26px;
+        height: 26px;
+        border: 3px solid #e5eaf0;
+        border-top-color: #0d9488;
+        border-radius: 50%;
+        box-sizing: border-box;
+        animation: boot-spin 0.8s linear infinite;
+      }
+      #boot-shell button {
+        font: inherit;
+        padding: 8px 18px;
+        border: 1px solid #78879b;
+        border-radius: 6px;
+        cursor: pointer;
+        color: inherit;
+        background: transparent;
+      }
+      #boot-shell [hidden] {
+        display: none;
+      }
+      @keyframes boot-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (prefers-color-scheme: dark) {
+        #boot-shell {
+          background: #181f2c;
+          color: #e0e8f3;
+        }
+        .boot-spinner {
+          border-color: #2b3547;
+          border-top-color: #5eead4;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .boot-spinner {
+          animation: none;
+        }
+      }
+    </style>
   </head>
   <body>
+    <div
+      id="boot-shell"
+      role="status"
+      aria-label="CodeCalを起動しています"
+      aria-busy="true"
+    >
+      <h1>CodeCal</h1>
+      <div class="boot-progress">
+        <span class="boot-spinner" aria-hidden="true"></span>
+        <p id="boot-message">画面を読み込んでいます…</p>
+      </div>
+      <p id="boot-error" role="alert" hidden></p>
+      <button id="boot-reload" type="button" hidden>再読み込み</button>
+      <noscript>CodeCalの表示にはJavaScriptが必要です。</noscript>
+    </div>
     <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <script src="/startup.js"></script>
+    <script id="app-module" type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -285,6 +285,17 @@ struct StartupContext {
     local: PathBuf,
     previous: PathBuf,
     initialization: Mutex<()>,
+    began: Instant,
+}
+#[tauri::command]
+fn show_startup(
+    window: tauri::WebviewWindow,
+    state: State<'_, StartupContext>,
+) -> Result<u64, String> {
+    window
+        .show()
+        .map_err(|_| "起動画面を表示できませんでした".to_string())?;
+    Ok(state.began.elapsed().as_millis() as u64)
 }
 #[derive(Serialize)]
 pub struct Bootstrap {
@@ -595,8 +606,9 @@ pub async fn source_excerpt(app: tauri::AppHandle, id: String) -> Result<String,
     .map_err(|e| e.to_string())?
 }
 pub fn run() {
+    let began = Instant::now();
     tauri::Builder::default()
-        .setup(|app| {
+        .setup(move |app| {
             let (local, previous) = if let Some(dir) = std::env::var_os("CODECAL_DATA_DIR") {
                 let dir = std::path::absolute(PathBuf::from(dir))?;
                 (dir.clone(), dir)
@@ -610,8 +622,7 @@ pub fn run() {
                     .with_state_flags(
                         tauri_plugin_window_state::StateFlags::SIZE
                             | tauri_plugin_window_state::StateFlags::POSITION
-                            | tauri_plugin_window_state::StateFlags::MAXIMIZED
-                            | tauri_plugin_window_state::StateFlags::VISIBLE,
+                            | tauri_plugin_window_state::StateFlags::MAXIMIZED,
                     )
                     .build(),
             )?;
@@ -620,6 +631,7 @@ pub fn run() {
                 local,
                 previous,
                 initialization: Mutex::new(()),
+                began,
             });
             // Register window-state before creating the main window so its
             // ready callback restores geometry and installs event tracking.
@@ -629,7 +641,16 @@ pub fn run() {
                 .windows
                 .first()
                 .ok_or("main window configuration missing")?;
-            tauri::WebviewWindowBuilder::from_config(app.handle(), window_config)?.build()?;
+            tauri::WebviewWindowBuilder::from_config(app.handle(), window_config)?
+                .on_page_load(|window, payload| {
+                    // Keep a local HTML error/shell visible even if its script fails.
+                    if payload.event() == tauri::webview::PageLoadEvent::Finished
+                        && payload.url().scheme() != "about"
+                    {
+                        let _ = window.show();
+                    }
+                })
+                .build()?;
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 use notify::{RecursiveMode, Watcher};
@@ -763,6 +784,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            show_startup,
             bootstrap,
             save_config,
             snapshot,

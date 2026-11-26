@@ -13,6 +13,7 @@ import {
 } from "react";
 import { DateTime } from "luxon";
 import { api } from "./api";
+import { markStartup, showReactStartup } from "./startup";
 import { useHumanActivity } from "./useHumanActivity";
 import { useHumanSummary } from "./useHumanSummary";
 import { HumanSyncTimes } from "./HumanSyncTimes";
@@ -178,6 +179,7 @@ function ProjectEditor({
   );
 }
 export default function App({ initialDate }: { initialDate?: string }) {
+  useEffect(showReactStartup, []);
   const [config, setConfig] = useState<Config | null>(null),
     [draft, setDraft] = useState<Config | null>(null),
     [data, setData] = useState(empty),
@@ -306,7 +308,9 @@ export default function App({ initialDate }: { initialDate?: string }) {
           requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
         );
         if (!alive) return;
+        markStartup("database_start_ms");
         const b = await api.boot();
+        markStartup("database_ready_ms");
         if (!alive) return;
         setConfig(b.config);
         setFirstRun(b.first_run);
