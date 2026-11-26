@@ -2,6 +2,7 @@ pub mod activity;
 pub mod claude;
 #[cfg(feature = "desktop")]
 mod desktop;
+pub mod human_runtime;
 mod migrations;
 pub mod parser;
 pub mod rei;

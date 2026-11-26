@@ -41,6 +41,7 @@ function saveFixture(value: unknown) {
   writeFileSync(stateFile, JSON.stringify({ main: value }));
 }
 async function launch() {
+  const startupBegan = Date.now();
   child = spawn(exe, [], {
     windowsHide: true,
     env: {
@@ -70,7 +71,8 @@ async function launch() {
           return false;
         }
       },
-      { timeout: 20000 },
+      // Use the same bounded cold WebView2 startup budget as native.spec.ts.
+      { timeout: 60000 },
     )
     .toBe(true)
     .catch((cause) => {
@@ -79,6 +81,9 @@ async function launch() {
         { cause },
       );
     });
+  console.info(
+    `Native WebView2 endpoint ready after ${Date.now() - startupBegan}ms`,
+  );
   browser = await chromium.connectOverCDP("http://127.0.0.1:9223");
   await expect
     .poll(() => browser.contexts().flatMap((c) => c.pages()).length)
@@ -122,6 +127,7 @@ async function geometry() {
   }));
 }
 test("window state restores position size and maximization after normal restart", async () => {
+  test.setTimeout(120000);
   mkdirSync(data, { recursive: true });
   mkdirSync(path.join(logs, "sessions"), { recursive: true });
   saveFixture(state);
@@ -175,6 +181,7 @@ test("window state restores position size and maximization after normal restart"
   }
 });
 test("window state safely opens with missing corrupt and disconnected-monitor state", async () => {
+  test.setTimeout(120000);
   mkdirSync(data, { recursive: true });
   mkdirSync(path.join(logs, "sessions"), { recursive: true });
   try {

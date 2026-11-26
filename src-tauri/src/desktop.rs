@@ -1,3 +1,4 @@
+use crate::human_runtime::{HumanClearResult, HumanPreferences, HumanRuntime, HumanSyncStatus};
 use crate::store::{Progress, Snapshot, Store};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -15,6 +16,8 @@ pub struct Config {
     pub claude_root: String,
     #[serde(default = "default_rei_enabled")]
     pub rei_enabled: bool,
+    #[serde(default)]
+    pub human_activity_enabled: bool,
     #[serde(default = "default_rei_root")]
     pub rei_root: String,
     pub timezone: String,
@@ -96,6 +99,7 @@ mod tests {
         assert_eq!(c.claude_enabled, default_claude_enabled());
         assert_eq!(c.rei_root, default_rei_root());
         assert_eq!(c.rei_enabled, default_rei_enabled());
+        assert!(!c.human_activity_enabled);
         assert_eq!(c.timezone, "Asia/Tokyo");
         assert_eq!(c.theme, "dark");
         assert!(!c.auto_refresh);
@@ -130,6 +134,57 @@ mod tests {
         c.log_root = file.display().to_string();
         assert_eq!(log_root_warnings(&c).len(), 1);
     }
+    #[test]
+    fn human_and_ai_settings_persist_independently_in_all_four_combinations() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        for ai in [false, true] {
+            for human in [false, true] {
+                let value = Config {
+                    rei_enabled: ai,
+                    human_activity_enabled: human,
+                    ..Config::default()
+                };
+                store
+                    .set_setting("config", &serde_json::to_string(&value).unwrap())
+                    .unwrap();
+                let loaded = config(&store).unwrap();
+                assert_eq!(loaded.rei_enabled, ai);
+                assert_eq!(loaded.human_activity_enabled, human);
+                assert_eq!(human_preferences(&loaded).enabled, human);
+            }
+        }
+    }
+    #[test]
+    fn human_only_watches_fixed_database_files_and_both_off_removes_rei_targets() {
+        let tmp = tempfile::tempdir().unwrap();
+        for file in [
+            "storage.db",
+            "storage.db-wal",
+            "projects.json",
+            "PRIVATE_SCREENSHOT.png",
+        ] {
+            std::fs::write(tmp.path().join(file), b"synthetic").unwrap();
+        }
+        std::fs::create_dir(tmp.path().join("projects")).unwrap();
+        let mut c = Config {
+            log_root: tmp.path().join("missing-codex").display().to_string(),
+            claude_enabled: false,
+            rei_enabled: false,
+            human_activity_enabled: true,
+            rei_root: tmp.path().display().to_string(),
+            ..Config::default()
+        };
+        let targets = watch_targets(&c);
+        assert_eq!(targets.len(), 2);
+        assert!(targets.iter().all(|target| !target.recursive));
+        assert!(targets.iter().all(|target| ["storage.db", "storage.db-wal"]
+            .iter()
+            .any(|name| target.path.file_name().unwrap() == *name)));
+        c.human_activity_enabled = false;
+        assert!(watch_targets(&c).is_empty());
+        c.rei_enabled = true;
+        assert_eq!(watch_targets(&c).len(), 4);
+    }
 }
 fn read_thresholds<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
@@ -147,6 +202,7 @@ impl Default for Config {
             claude_enabled: default_claude_enabled(),
             claude_root: default_claude_root(),
             rei_enabled: default_rei_enabled(),
+            human_activity_enabled: false,
             rei_root: default_rei_root(),
             log_root: std::env::var("CODEX_HOME").unwrap_or_else(|_| {
                 let home = std::env::var("USERPROFILE")
@@ -165,6 +221,54 @@ impl Default for Config {
 pub struct AppState {
     pub store: Mutex<Store>,
     pub db_path: String,
+    pub human: HumanRuntime,
+}
+fn human_preferences(config: &Config) -> HumanPreferences {
+    HumanPreferences {
+        enabled: config.human_activity_enabled,
+        root: PathBuf::from(&config.rei_root),
+        auto_refresh: config.auto_refresh,
+    }
+}
+#[derive(PartialEq, Eq)]
+struct WatchTarget {
+    path: PathBuf,
+    recursive: bool,
+    identity: Option<String>,
+}
+fn watch_targets(config: &Config) -> Vec<WatchTarget> {
+    let mut paths = vec![(PathBuf::from(&config.log_root), true)];
+    if config.claude_enabled {
+        paths.push((PathBuf::from(&config.claude_root), true));
+    }
+    if config.rei_enabled || config.human_activity_enabled {
+        let root = PathBuf::from(&config.rei_root);
+        paths.push((root.join("storage.db"), false));
+        paths.push((root.join("storage.db-wal"), false));
+        if config.rei_enabled {
+            paths.push((root.join("projects.json"), false));
+            paths.push((root.join("projects"), true));
+        }
+    }
+    let mut targets = Vec::new();
+    for (path, recursive) in paths {
+        if !path.exists()
+            || targets
+                .iter()
+                .any(|target: &WatchTarget| target.path == path && target.recursive == recursive)
+        {
+            continue;
+        }
+        let identity = (!recursive)
+            .then(|| crate::rei_human::source_identity(&path).ok())
+            .flatten();
+        targets.push(WatchTarget {
+            path,
+            recursive,
+            identity,
+        });
+    }
+    targets
 }
 struct StartupContext {
     local: PathBuf,
@@ -198,9 +302,28 @@ pub async fn bootstrap(app: tauri::AppHandle, timezone: String) -> Result<Bootst
             let store = Store::open_with_progress(&path, || {
                 let _ = app.emit("startup-progress", "migrating");
             })?;
+            let (c, first_run, notices) = bootstrap_config(&store, timezone.clone())?;
+            let handle = app.clone();
+            let human = HumanRuntime::new(
+                path.clone(),
+                path.parent()
+                    .ok_or("invalid_cache_path")?
+                    .join("human-staging"),
+                move |status| {
+                    let _ = handle.emit("human-status", status);
+                },
+            );
+            human.configure(human_preferences(&c), || Ok(()))?;
             app.manage(AppState {
                 store: Mutex::new(store),
                 db_path: path.display().to_string(),
+                human,
+            });
+            return Ok(Bootstrap {
+                config: c,
+                db_path: path.display().to_string(),
+                first_run,
+                notices,
             });
         }
         drop(initialization);
@@ -266,6 +389,9 @@ fn log_root_warnings(value: &Config) -> Vec<String> {
             warnings.push(format!("{message}: {}", rei_root.display()));
         }
     }
+    if value.human_activity_enabled && !rei_root.join("storage.db").is_file() {
+        warnings.push("人間のアクティビティ用 storage.db が見つかりません。前回の正常なキャッシュは保持します。".into());
+    }
     warnings
 }
 #[tauri::command]
@@ -273,14 +399,13 @@ pub async fn save_config(app: tauri::AppHandle, value: Config) -> Result<Vec<Str
     tauri::async_runtime::spawn_blocking(move || {
         validate_config(&value)?;
         let warnings = log_root_warnings(&value);
-        app.state::<AppState>()
-            .store
-            .lock()
-            .map_err(|e| e.to_string())?
-            .set_setting(
+        let state = app.state::<AppState>();
+        state.human.configure(human_preferences(&value), || {
+            state.store.lock().map_err(|e| e.to_string())?.set_setting(
                 "config",
                 &serde_json::to_string(&value).map_err(|e| e.to_string())?,
-            )?;
+            )
+        })?;
         Ok(warnings)
     })
     .await
@@ -302,7 +427,7 @@ fn validate_config(value: &Config) -> Result<(), String> {
         return Err("ヒートマップのしきい値は正の数を昇順で指定してください".into());
     }
     if value.log_root.trim().is_empty()
-        || (value.rei_enabled && value.rei_root.trim().is_empty())
+        || ((value.rei_enabled || value.human_activity_enabled) && value.rei_root.trim().is_empty())
         || (value.claude_enabled && value.claude_root.trim().is_empty())
     {
         return Err("ログディレクトリを指定してください".into());
@@ -351,9 +476,55 @@ fn sync_app(app: &tauri::AppHandle) -> Result<Progress, String> {
 }
 #[tauri::command]
 pub async fn sync_logs(app: tauri::AppHandle) -> Result<Progress, String> {
-    tauri::async_runtime::spawn_blocking(move || sync_app(&app))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(state) = app.try_state::<AppState>() {
+            state.human.request(true);
+        }
+        sync_app(&app)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub fn human_status(state: State<'_, AppState>) -> HumanSyncStatus {
+    state.human.status()
+}
+#[tauri::command]
+pub fn sync_human(state: State<'_, AppState>) {
+    state.human.request(true);
+}
+#[tauri::command]
+pub async fn human_activity(
+    app: tauri::AppHandle,
+    from: i64,
+    to: i64,
+) -> Result<crate::rei_human::HumanActivityResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.try_state::<AppState>()
+            .ok_or("human_not_ready")?
+            .human
+            .period(from, to)
+    })
+    .await
+    .map_err(|_| "human_request_failed")?
+}
+#[tauri::command]
+pub async fn clear_human_activity(
+    app: tauri::AppHandle,
+    all: bool,
+) -> Result<HumanClearResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.try_state::<AppState>().ok_or("human_not_ready")?;
+        let result = state.human.clear(all, |store| {
+            let mut c = config(store)?;
+            c.human_activity_enabled = false;
+            serde_json::to_string(&c).map_err(|_| "invalid_config".into())
+        })?;
+        let _ = app.emit("human-status", state.human.status());
+        Ok(result)
+    })
+    .await
+    .map_err(|_| "human_request_failed")?
 }
 #[tauri::command]
 pub async fn update_project(
@@ -421,14 +592,27 @@ pub fn run() {
             std::thread::spawn(move || {
                 use notify::{RecursiveMode, Watcher};
                 let (sender, receiver) = std::sync::mpsc::channel();
-                let watcher_result = notify::recommended_watcher(move |result| {
-                    let _ = sender.send(result);
-                });
+                let event_handle = handle.clone();
+                let watcher_result =
+                    notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
+                        if result.as_ref().is_ok_and(|event| {
+                            event.paths.iter().any(|path| {
+                                path.file_name().is_some_and(|name| {
+                                    name == "storage.db" || name == "storage.db-wal"
+                                })
+                            })
+                        }) {
+                            if let Some(state) = event_handle.try_state::<AppState>() {
+                                state.human.request(false);
+                            }
+                        }
+                        let _ = sender.send(result);
+                    });
                 let watcher_warning = watcher_result.as_ref().err().map(|e| {
                     format!("ファイル監視を初期化できません。30秒ごとの定期走査で補完します: {e}")
                 });
                 let mut watcher = watcher_result.ok();
-                let mut watching: Vec<String> = Vec::new();
+                let mut watching: Vec<WatchTarget> = Vec::new();
                 let mut dirty: Option<Instant> = None;
                 let mut first_dirty: Option<Instant> = None;
                 let mut last_scan = Instant::now();
@@ -480,13 +664,7 @@ pub fn run() {
                         };
                         config(&store).unwrap_or_default()
                     };
-                    let mut roots = vec![c.log_root];
-                    if c.rei_enabled && !roots.contains(&c.rei_root) {
-                        roots.push(c.rei_root);
-                    }
-                    if c.claude_enabled && !roots.contains(&c.claude_root) {
-                        roots.push(c.claude_root);
-                    }
+                    let roots = watch_targets(&c);
                     if roots != watching {
                         let mut watch_warnings = vec![];
                         if let Some(message) = &watcher_warning {
@@ -494,15 +672,21 @@ pub fn run() {
                         }
                         if let Some(w) = watcher.as_mut() {
                             for root in &watching {
-                                let _ = w.unwatch(std::path::Path::new(root));
+                                let _ = w.unwatch(&root.path);
                             }
                             for root in &roots {
-                                if let Err(e) =
-                                    w.watch(std::path::Path::new(root), RecursiveMode::Recursive)
+                                if w.watch(
+                                    &root.path,
+                                    if root.recursive {
+                                        RecursiveMode::Recursive
+                                    } else {
+                                        RecursiveMode::NonRecursive
+                                    },
+                                )
+                                .is_err()
                                 {
-                                    watch_warnings.push(format!(
-                                        "監視を開始できません。定期走査で補完します: {e}"
-                                    ));
+                                    watch_warnings
+                                        .push("監視を開始できません。定期走査で補完します".into());
                                 }
                             }
                         }
@@ -535,6 +719,10 @@ pub fn run() {
             save_config,
             snapshot,
             sync_logs,
+            human_status,
+            sync_human,
+            human_activity,
+            clear_human_activity,
             update_project,
             source_excerpt
         ])
