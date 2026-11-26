@@ -1,8 +1,37 @@
 import unittest
-from human_performance_report import summarize
+from human_performance_report import summarize, summarize_worker
 
 
 class PerformanceReportTest(unittest.TestCase):
+    def worker_rows(self):
+        return [dict(rows=1000000, id_kind="uuid", payload_bytes=200,
+                     initial_worker_ms=9000, forced_worker_ms=6000,
+                     unchanged_active_ms=[1, 2, 3, 4, 5], unchanged_queue_ms=[1200]*5,
+                     summary_ms=20, writer_baseline_samples=200, writer_concurrent_samples=210,
+                     writer_baseline_p95_ms=10, writer_concurrent_p95_ms=15,
+                     writer_budget_pass=True, followup_caught_writes=True,
+                     writer_passive_checkpoint_after_read=[0, 123, 123],
+                     fixture_writer_truncated_wal_bytes=0) for _ in range(5)]
+
+    def test_worker_counts_active_work_separately_from_debounce_queue(self):
+        result=summarize_worker(self.worker_rows())
+        self.assertTrue(result["worker_gates_passed"])
+        self.assertEqual(result["metrics"]["unchanged_active_ms"]["samples"],25)
+        self.assertEqual(result["metrics"]["unchanged_active_ms"]["p95_ms"],5)
+
+    def test_worker_does_not_hide_a_slow_or_missing_round(self):
+        rows=self.worker_rows()
+        rows[1]["initial_worker_ms"]=11532
+        self.assertFalse(summarize_worker(rows)["worker_gates_passed"])
+        self.assertFalse(summarize_worker(self.worker_rows()[:4])["worker_gates_passed"])
+
+    def test_worker_requires_writer_budget_caught_updates_and_complete_wal_release(self):
+        for field,value in [("writer_concurrent_p95_ms",21),
+                            ("followup_caught_writes",False),
+                            ("writer_passive_checkpoint_after_read",[0,123,122])]:
+            rows=self.worker_rows()
+            rows[0][field]=value
+            self.assertFalse(summarize_worker(rows)["worker_gates_passed"])
     def rows(self, initial=100):
         return [dict(rows=1000000, id_kind="uuid", cadence_ms=60000, round=i+1,
                      initial_sync_ms=initial, unchanged_check_ms=1,

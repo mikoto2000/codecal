@@ -4,6 +4,7 @@ param(
   [ValidateRange(1, 20)][int]$Rounds = 1,
   [ValidateRange(1, 60000)][int]$CadenceMs = 60000,
   [int[]]$Sizes = @(10000, 100000, 1000000),
+  [switch]$NoSizeArguments,
   [ValidatePattern('^[a-zA-Z0-9_-]+$')][string]$Label = 'run'
 )
 $ErrorActionPreference = 'Stop'
@@ -25,7 +26,9 @@ try {
   $env:TMP = $taskTemp
   $env:TEMP = $taskTemp
   $taskBegan = [Diagnostics.Stopwatch]::StartNew()
-  $taskProcess = Start-Process -FilePath (Resolve-Path -LiteralPath $BenchmarkExe).Path -ArgumentList $Sizes -WindowStyle Hidden -PassThru -RedirectStandardOutput $taskStdout -RedirectStandardError $taskStderr
+  $taskArguments = @{}
+  if (-not $NoSizeArguments) { $taskArguments.ArgumentList = $Sizes }
+  $taskProcess = Start-Process -FilePath (Resolve-Path -LiteralPath $BenchmarkExe).Path @taskArguments -WindowStyle Hidden -PassThru -RedirectStandardOutput $taskStdout -RedirectStandardError $taskStderr
   [long]$taskPeakRss = 0
   [long]$taskPeakPrivate = 0
   [long]$taskSamples = 0

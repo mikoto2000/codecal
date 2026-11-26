@@ -242,23 +242,26 @@ export default function App({ initialDate }: { initialDate?: string }) {
     const d = await api.snapshot(timezone);
     if (n === generation.current) setData(d);
   }, []);
-  const synchronize = useCallback(async (human = true) => {
-    setSyncing(true);
-    setProgress("ログを走査中");
-    try {
-      const result = await api.sync(human);
-      await reload(zoneRef.current);
-      setProgress(
-        `${result.files} ファイル確認 · ${Math.round(result.bytes_read / 1024)} KB 読み込み`,
-      );
-      setWarnings(result.warnings);
-      setError("");
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setSyncing(false);
-    }
-  }, [reload]);
+  const synchronize = useCallback(
+    async (human = true) => {
+      setSyncing(true);
+      setProgress("ログを走査中");
+      try {
+        const result = await api.sync(human);
+        await reload(zoneRef.current);
+        setProgress(
+          `${result.files} ファイル確認 · ${Math.round(result.bytes_read / 1024)} KB 読み込み`,
+        );
+        setWarnings(result.warnings);
+        setError("");
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setSyncing(false);
+      }
+    },
+    [reload],
+  );
   useEffect(() => {
     let alive = true;
     let off: (() => void) | undefined;
