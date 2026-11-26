@@ -44,6 +44,8 @@ export function useHumanSummary({
       scope,
       days: !state.loading && !state.error ? response.days : [],
     });
+  else if (state.error && prefilter.days.length > 0)
+    setPrefilter({ scope, days: [] });
   else if (
     enabled &&
     !state.loading &&
@@ -54,7 +56,10 @@ export function useHumanSummary({
   return {
     ...state,
     days: response.days,
-    unfilteredDays: enabled && prefilter.scope === scope ? prefilter.days : [],
+    unfilteredDays:
+      enabled && !state.error && prefilter.scope === scope
+        ? prefilter.days
+        : [],
     diagnostics: response.diagnostics,
   };
 }
